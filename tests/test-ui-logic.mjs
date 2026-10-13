@@ -173,6 +173,19 @@ const { FRONTIER_POOL } = await import(pathToFileURL(path.join(here, "../engine/
   const want3 = massOf(two.pair[0]) / viable.reduce((a, k) => a + massOf(k), 0);
   ok(near(p3.setOdds.find((x) => x.key === two.pair[0])?.p ?? 0, want3, 1e-9), `two candidates, bracket: odds from the trainer draw (${two.pair[0]} ${(100 * want3).toFixed(1)}%)`);
 
+  // A seen teammate moves the odds: P(set k) prop. to sum over trainers t (with these IVs)
+  // of P(t) x P(lead k | t) x P(the mate is in the party | t, lead k) -- worked
+  // trainer by trainer here.
+  const mate = N.poolEntry(p3.cands[0].mix[0].ids[1]).key;
+  const p5 = U.buildPosition(base({ opp: opp({ candidates: two.pair, ivTier: ivs }), party: { lead: null, others: [{ setKey: mate, hpPct: 100 }] }, run: { challenge: 7, battle: 1, turn: 1 } }));
+  const massMate = (k) => prior.reduce((a, t) => {
+    let d; try { d = N.teammateDist([{ id: t.id, p: 1 }], FRONTIER_POOL[k].index); } catch { return a; }
+    return a + t.p * d.mass * d.filter((x) => x.slots.includes(N.setId(mate))).reduce((s, x) => s + x.p, 0);
+  }, 0);
+  const tot5 = two.pair.reduce((a, k) => a + massMate(k), 0);
+  ok(two.pair.every((k) => near(p5.setOdds.find((x) => x.key === k)?.p ?? 0, massMate(k) / tot5, 1e-9)) && Math.abs(p5.setOdds[0].p - p3.setOdds.find((x) => x.key === p5.setOdds[0].key).p) > 1e-6,
+    `seeing ${mate} moves the odds (${p5.setOdds.map((x) => `${x.key} ${(100 * x.p).toFixed(1)}%`).join(", ")})`);
+
   // An ability one candidate cannot have rules it out; nothing left throws.
   const abOnly = (k) => FRONTIER_POOL[k].abilities;
   const distinctAb = abOnly(two.pair[0]).find((a) => !abOnly(two.pair[1]).includes(a));
