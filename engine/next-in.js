@@ -63,6 +63,12 @@ export const poolEntry = (id) => POOL_BY_ID[id];
 export const BRAIN_TEAMS = {
   "Spenser Silver": ["Spenser Silver Crobat", "Spenser Silver Slaking", "Spenser Silver Lapras"],
   "Spenser Gold": ["Spenser Gold Arcanine", "Spenser Gold Slaking", "Spenser Gold Suicune"],
+  // TOWER FORK: the Tower's Brain, Anabel (sFrontierBrainsMons[FRONTIER_FACILITY_
+  // TOWER], src/frontier_util.c:99-176, party order). She comes at win streak 35
+  // (Silver) and 70 (Gold), and with both symbols every 35 after 70
+  // (sFrontierBrainStreakAppearances[TOWER] = {35, 70, 35, 1}, frontier_util.c:88).
+  "Anabel Silver": ["Anabel Silver Alakazam", "Anabel Silver Entei", "Anabel Silver Snorlax"],
+  "Anabel Gold": ["Anabel Gold Raikou", "Anabel Gold Latios", "Anabel Gold Snorlax"],
 };
 const BRAIN_ID_BASE = 10000;
 // A set's id for mostSuitable / buildReplacement: its frontier index, or the
