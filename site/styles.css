@@ -132,3 +132,10 @@ textarea { width: 100%; resize: vertical; min-height: 130px; }
 .seen-moves { display: flex; flex-wrap: wrap; gap: 4px 12px; flex: 1; }
 .seen-move { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; }
 input[type="number"].hp-small { width: 58px; }
+
+/* "Could be": the other sets of the species, with their odds */
+.cand-block { margin: -4px 0 10px; }
+.cand-row { display: flex; align-items: baseline; gap: 6px; font-size: 13px; margin-bottom: 4px; }
+.cand-row .cand-p { color: var(--accent); min-width: 44px; text-align: right; }
+.cand-row .cand-meta { color: var(--muted); }
+.cand-row.out .cand-name, .cand-row.out .cand-meta { opacity: 0.55; }

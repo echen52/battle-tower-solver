@@ -101,6 +101,11 @@ function merge(rows, keyOf) {
 //   lead  pool key of slot 0;  seen  other pool keys seen (0-2)
 //   ivs   the IVs you entered for the mon out (one value per trainer): keeps
 //         only the trainers that give it; null = no filter
+//   trainerId  the trainer, when you know who it is (else the bracket's draw)
+// The returned array carries `mass`: the prior probability of everything
+// conditioned on (this lead, the seen mons in the party, the IVs) -- so two
+// candidate sets for the same mon can be weighed against each other by it.
+// A Brain's mass is 1 (her team is certain).
 export function partyMix({ lead, seen = [], challenge, battle, trainerId, brain = null, level = 50, ivs = null } = {}) {
   if (!FRONTIER_POOL[lead]) throw new Error(`tower: no Frontier set named "${lead}"`);
   for (const k of seen) if (!FRONTIER_POOL[k]) throw new Error(`tower: no Frontier set named "${k}"`);
@@ -111,7 +116,7 @@ export function partyMix({ lead, seen = [], challenge, battle, trainerId, brain 
     if (!t) throw new Error(`tower: no Frontier Brain team "${brain}"`);
     if (lead !== t[0]) throw new Error(`${brain.split(" ")[0]} always sends out ${FRONTIER_POOL[t[0]].species} first`);
     for (const k of seen) if (!t.includes(k)) throw new Error(`${k} is not on ${brain}'s team`);
-    return [{ p: 1, ids: t.map(setId), ivs: FRONTIER_POOL[t[0]].fixedIV }];
+    return Object.assign([{ p: 1, ids: t.map(setId), ivs: FRONTIER_POOL[t[0]].fixedIV }], { mass: 1 });
   }
   if (FRONTIER_POOL[lead].brain) throw new Error(`tower: ${lead} is a Frontier Brain set -- pick the Brain battle`);
   const open = level !== 50;
@@ -125,7 +130,7 @@ export function partyMix({ lead, seen = [], challenge, battle, trainerId, brain 
     kept = byIv;
   }
   const total = kept.reduce((a, d) => a + d.p, 0);
-  return kept.map((d) => ({ p: d.p / total, ids: [setId(lead), ...d.slots], ivs: d.ivs }));
+  return Object.assign(kept.map((d) => ({ p: d.p / total, ids: [setId(lead), ...d.slots], ivs: d.ivs })), { mass: dist.mass * total });
 }
 
 // ── 4. the readout: the opponent's action over what you do not know ────────

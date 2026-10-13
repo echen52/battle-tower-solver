@@ -154,7 +154,10 @@ export function teammateDist(prior, leadId, { open = false } = {}) {
     const cur = merged.get(k);
     if (cur) cur.p += r.p / total; else merged.set(k, { p: r.p / total, slots: r.slots, ivs });
   }
-  return [...merged.values()];
+  // TOWER FORK: `mass` = P(this lead) under the prior, sum over trainers of
+  // P(trainer) x P(lead | trainer) -- what the normalisation divided out, kept
+  // so leads can be weighed against each other (tower.js partyMix).
+  return Object.assign([...merged.values()], { mass: total });
 }
 
 // ── 2. GetMostSuitableMonToSwitchInto ──────────────────────────────────────

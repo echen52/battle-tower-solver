@@ -80,6 +80,10 @@
       <label for="battle" class="inline-label">Battle</label>
       <select id="battle" class="trigger"></select>
     </div>
+    <div class="field-row" id="trainerRow">
+      <label for="trainer" title="The trainer's name and class, as the game shows them before the battle. Their Pokémon come from that trainer's own pool, with one IV value. Leave empty to average over every trainer this battle can draw.">Trainer</label>
+      <div class="combo-wrap"><input type="text" id="trainer" class="trigger combo-input" placeholder="Any (type a name)" autocomplete="off" /><div class="combo-list" id="trainerList"></div></div>
+    </div>
     <div class="field-row">
       <label for="turn" title="The battle's turn number (1 = the first turn). The AI reads it.">Turn</label>
       <input type="number" id="turn" class="trigger" value="1" min="1" max="999" />
@@ -140,6 +144,10 @@
       <input type="checkbox" id="bracketOnly" class="trigger" checked /><label for="bracketOnly" class="chk-label">Only sets this challenge can have</label>
     </div>
     <div id="oppCard" class="set-card" hidden></div>
+    <div id="candBlock" class="cand-block" hidden>
+      <div class="col-title" title="Other sets of this species the trainer (or this battle's trainers) can have. Tick the ones it could still be; untick a set once it uses a move that set does not have. The odds are from the trainer draw.">Could be</div>
+      <div id="candList"></div>
+    </div>
     <div class="field-row" id="oppAbilityRow" hidden>
       <label for="oppAbility">Ability</label>
       <select id="oppAbility" class="trigger"></select>

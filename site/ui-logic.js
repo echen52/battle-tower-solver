@@ -11,6 +11,7 @@ import { FRONTIER_POOL } from "../engine/frontier-pool.js";
 import { FRONTIER_TRAINERS } from "../engine/frontier-trainers.js";
 import { trainerPrior, fixedIvs } from "../engine/next-in.js";
 import { partyMix, oppReadout } from "../engine/tower.js";
+import { TRAINER_CLASS_NAMES } from "../engine/trainer-classes.js";
 
 export const STAGE_KEYS = ["atk", "def", "spa", "spd", "spe", "accuracy", "evasion"];
 const HIGH_TIER = 849;
@@ -47,16 +48,34 @@ export function brainFor({ challenge, battle } = {}) {
   return battle === 7 && challenge === 5 ? "Anabel Silver" : null;
 }
 
+// ── the trainer ────────────────────────────────────────────────────────────
+// The trainers this challenge and battle can draw (GetRandomScaledFrontier
+// TrainerId's range, next-in.js trainerPrior), labelled as the game names them
+// before the battle: "Miriam (Cooltrainer)" -- name + class, because a name
+// alone is not unique (checked: name + class is unique in every bracket).
+const titleCase = (s) => s.toLowerCase().replace(/(^|[ -])([a-z])/g, (_, a, b) => a + b.toUpperCase());
+export const trainerLabel = (id) => { const t = FRONTIER_TRAINERS[id]; return `${titleCase(t.name)} (${TRAINER_CLASS_NAMES[t.cls]})`; };
+export function trainerChoices({ challenge, battle } = {}) {
+  if (!challenge || !battle) return [];
+  return trainerPrior({ challenge, battle }).map(({ id }) => ({ id, label: trainerLabel(id) }))
+    .sort((a, b) => a.label.localeCompare(b.label));
+}
+// The trainer's drawable pool at this level: monSet ids (duplicates kept --
+// FillTrainerParty draws monSet[Random() % n]), high tier only at Open Level.
+const trainerPool = (id, level) => FRONTIER_TRAINERS[id].monSet.filter((m) => isOpen(level) || m <= HIGH_TIER);
+
 // ── the opponent's set list ────────────────────────────────────────────────
-// The sets for the level mode, optionally only those a trainer drawn for this
-// challenge and battle can have. brain: her three, in party order.
-export function setChoices({ challenge, battle, bracketOnly = true, brain = null, level = 50 } = {}) {
+// The sets for the level mode: a trainer's own pool when you know the
+// trainer; else optionally only those a trainer drawn for this challenge and
+// battle can have. brain: her three, in party order.
+export function setChoices({ challenge, battle, bracketOnly = true, brain = null, level = 50, trainerId = null } = {}) {
   if (brain) return [...BRAIN_TEAMS_TOWER[brain]];
   const open = isOpen(level);
   let ids = null;
-  if (bracketOnly && challenge && battle) {
+  if (trainerId != null) ids = new Set(trainerPool(trainerId, level));
+  else if (bracketOnly && challenge && battle) {
     ids = new Set();
-    for (const { id } of trainerPrior({ challenge, battle })) for (const m of FRONTIER_TRAINERS[id].monSet) if (open || m <= HIGH_TIER) ids.add(m);
+    for (const { id } of trainerPrior({ challenge, battle })) for (const m of trainerPool(id, level)) ids.add(m);
   }
   // Integer index only: the pool also carries the Frontier Brain sets and a
   // duplicate "Mr. Mime 1-4" (index null) beside the indexed "MR_MIME 1-4".
@@ -66,16 +85,25 @@ export function setChoices({ challenge, battle, bracketOnly = true, brain = null
     .sort((a, b) => setLabel(a).localeCompare(setLabel(b), undefined, { numeric: true }));
 }
 export const setLabel = (key) => key.replace(/^MR_MIME /, "Mr. Mime ");
+// The other sets of the same species the pool holds (the "it's one of these"
+// list), the set itself included, in set order.
+export function sameSpecies(setKey, opts = {}) {
+  const sp = FRONTIER_POOL[setKey]?.species;
+  if (!sp || opts.brain) return setKey ? [setKey] : [];
+  return setChoices({ ...opts, bracketOnly: true }).filter((k) => FRONTIER_POOL[k].species === sp);
+}
 
 // The trainer IV bands a set can come with in this bracket, most likely first
 // (each trainer weighted by the chance it is drawn and has this set at all).
-export function ivTierOdds(setKey, { challenge, battle, level = 50 } = {}) {
+// A known trainer: its one value (GetFrontierTrainerFixedIvs).
+export function ivTierOdds(setKey, { challenge, battle, level = 50, trainerId = null } = {}) {
   const e = FRONTIER_POOL[setKey];
   if (e?.brain) return [{ iv: e.fixedIV, p: 1 }];
+  if (trainerId != null) return [{ iv: fixedIvs(trainerId), p: 1 }];
   if (!e || !challenge || !battle) return [];
   const by = new Map();
   for (const { id, p } of trainerPrior({ challenge, battle })) {
-    const lv = FRONTIER_TRAINERS[id].monSet.filter((m) => isOpen(level) || m <= HIGH_TIER);
+    const lv = trainerPool(id, level);
     const n = lv.filter((m) => m === e.index).length;
     if (!n) continue;
     const iv = fixedIvs(id);
@@ -120,12 +148,22 @@ export function sleepCounters({ rest = false, slept = 0 } = {}, mon) {
 //   team: [config x1-3], active: index of your mon out,
 //   mons: [{ hpPct, status, toxicTurns, sleep: { rest, slept }, itemGone }] per team member,
 //   you: { stages, confused, subPct, firstTurn, lastMove (null = none yet), landed, seen: [moves] },
-//   opp: { setKey, ability, ivTier, gender, hpPct, status, toxicTurns, sleep, itemGone, stages, confused, firstTurn },
-//   party: { lead (pool key; null = the mon out is their lead), others: [{ setKey, hpPct }] (0-2, seen and benched) },
+//   opp: { setKey, candidates ([pool keys of the same species it could be,
+//          setKey among them]; omitted = setKey only), ability (null = not seen:
+//          each of the set's abilities equally likely), ivTier, gender, hpPct,
+//          status, toxicTurns, sleep, itemGone, stages, confused, firstTurn },
+//   party: { lead (pool key; null = the mon out is their lead), leadHpPct, others: [{ setKey, hpPct }] (0-2) },
 //   field: { weather, weatherTurns, you: { reflect, reflectTurns, lightScreen, lightScreenTurns, spikes }, opp: {...} },
-//   run: { challenge, battle, brain, level, turn },
+//   run: { challenge, battle, trainerId (null = not known), brain, level, turn },
 // }
-// Returns { team, opp, start: [{ p, state }], mix, known, active, level, notes }.
+// Returns { team, cands, setOdds, excluded, opp, active, level, notes }:
+//   cands     [{ key, ability, w, opp, start: [{ p, state }], mix, known }], the
+//             w summing to 1: each candidate set and ability weighted by the
+//             prior chance of what you have seen given it (partyMix's mass:
+//             the trainer draw makes this set the mon out, with the seen mons
+//             and IVs), x 1 / its number of abilities when the ability is not seen
+//   setOdds   [{ key, p }] the same, summed over abilities, most likely first
+//   excluded  [{ key, why }] candidates the evidence rules out
 const SCREEN_TURNS = 5;
 const MAX_SLEEP_VARIANTS = 64;
 export function buildPosition(form) {
@@ -136,21 +174,65 @@ export function buildPosition(form) {
   if (form.team.some((cfg) => cfg.level !== level)) notes.push(`Read at level ${level} (the button above), whatever Level the paste gives.`);
   const team = form.team.map((cfg) => buildPlayerMon({ ...cfg, level }));
   const brain = run.brain ?? null;
-  const active = form.opp.setKey;
-  const lead = form.party?.lead || active;
+  const trainerId = brain ? null : (run.trainerId ?? null);
+  const primary = form.opp.setKey;
+  if (!FRONTIER_POOL[primary]) throw new Error(`no Frontier set named "${primary}"`);
+  const candidates = [...new Set([primary, ...(form.opp.candidates ?? [])])];
+  for (const k of candidates) {
+    if (!FRONTIER_POOL[k]) throw new Error(`no Frontier set named "${k}"`);
+    if (FRONTIER_POOL[k].species !== FRONTIER_POOL[primary].species) throw new Error(`${k} is not a ${FRONTIER_POOL[primary].species}: the candidates are sets of the mon out`);
+  }
+  const lead = form.party?.lead || null; // null: the mon out IS their lead
   const others = (form.party?.others ?? []).filter((o) => o && o.setKey);
-  const seenKeys = [lead, active, ...others.map((o) => o.setKey)];
-  const distinct = [...new Set(seenKeys)];
-  if (distinct.length !== seenKeys.length - (lead === active ? 1 : 0)) throw new Error("the same set is entered twice in their party");
-  if (distinct.length > 3) throw new Error("their party has 3 Pokémon: more than 3 entered");
+  const fixed = [...(lead ? [lead] : []), ...others.map((o) => o.setKey)];
+  if (new Set(fixed).size !== fixed.length) throw new Error("the same set is entered twice in their party");
+  if (fixed.length > 2) throw new Error("their party has 3 Pokémon: more than 3 entered");
+  for (const k of fixed) if (FRONTIER_POOL[k].species === FRONTIER_POOL[primary].species) throw new Error(`${setLabel(k)}: a party never has two ${FRONTIER_POOL[k].species} (FillTrainerParty's species check)`);
   if (brain) {
     const bt = BRAIN_TEAMS_TOWER[brain];
-    for (const k of distinct) if (!bt.includes(k)) throw new Error(`${k} is not on ${brain}'s team (${bt.join(", ")})`);
-    if (lead !== bt[0]) throw new Error(`Anabel always sends out ${FRONTIER_POOL[bt[0]].species} first`);
-  } else for (const k of distinct) if (FRONTIER_POOL[k]?.brain) throw new Error(`${k} is a Frontier Brain set: pick the Brain battle`);
-  const opp = buildOpponent({ ...form.opp, level });
+    for (const k of [...candidates, ...fixed]) if (!bt.includes(k)) throw new Error(`${k} is not on ${brain}'s team (${bt.join(", ")})`);
+    if ((lead ?? primary) !== bt[0]) throw new Error(`Anabel always sends out ${FRONTIER_POOL[bt[0]].species} first`);
+  } else for (const k of [...candidates, ...fixed]) if (FRONTIER_POOL[k]?.brain) throw new Error(`${k} is a Frontier Brain set: pick the Brain battle`);
+  if (!brain && trainerId == null && !(run.challenge && run.battle)) throw new Error("pick the challenge and battle (they decide who the unseen teammates can be)");
+  // A known trainer gives all its mons one IV value (GetFrontierTrainerFixedIvs).
+  const ivs = brain ? FRONTIER_POOL[primary].fixedIV : trainerId != null ? fixedIvs(trainerId) : form.opp.ivTier;
+  const lv = isOpen(level) ? { level } : {};
 
-  // Your side and the active opponent, as the team layer starts them.
+  const cands = [], excluded = [];
+  for (const key of candidates) {
+    const e = FRONTIER_POOL[key];
+    if (form.opp.ability && !e.abilities.includes(form.opp.ability)) { excluded.push({ key, why: `cannot have ${form.opp.ability}` }); continue; }
+    let mix;
+    try {
+      mix = partyMix({ lead: lead ?? key, seen: [...(lead ? [key] : []), ...others.map((o) => o.setKey)], challenge: run.challenge, battle: run.battle, trainerId, brain, ivs, ...lv });
+    } catch (err) { excluded.push({ key, why: err.message.replace(/^tower: /, "") }); continue; }
+    const abilities = form.opp.ability ? [form.opp.ability] : e.abilities;
+    for (const ability of abilities) {
+      const opp = buildOpponent({ ...form.opp, setKey: key, ability, ivTier: ivs, level });
+      const known = { [key]: { mon: opp } };
+      if (lead) known[lead] = { hpPct: form.party.leadHpPct ?? 100 };
+      for (const o of others) known[o.setKey] = { hpPct: o.hpPct ?? 100 };
+      cands.push({ key, ability, w: mix.mass / abilities.length, opp, start: startMix(form, team, opp, run, notes), mix, known });
+    }
+  }
+  if (!cands.length) throw new Error(`none of the sets entered fits what you have seen: ${excluded.map((x) => `${setLabel(x.key)} ${x.why}`).join("; ")}`);
+  const total = cands.reduce((a, c) => a + c.w, 0);
+  for (const c of cands) c.w /= total;
+  const by = new Map();
+  for (const c of cands) by.set(c.key, (by.get(c.key) ?? 0) + c.w);
+  const setOdds = [...by.entries()].map(([key, p]) => ({ key, p })).sort((a, b) => b.p - a.p);
+
+  const unseen = 3 - 1 - fixed.length;
+  if (unseen > 0 && !brain) notes.push(`Their ${unseen === 1 ? "last Pokémon is" : "other two are"} unknown: averaged over the parties ${trainerId != null ? "this trainer" : "this challenge's trainers"} can draw (which mon came in when is not used as evidence).`);
+  if (!form.opp.ability && cands.some((c) => FRONTIER_POOL[c.key].abilities.length > 1)) notes.push("Ability not set: each of its abilities is equally likely.");
+  const gn = genderNote(team, form.active, cands[0].opp);
+  if (gn) notes.push(gn);
+  return { team, cands, setOdds, excluded, opp: cands[0].opp, active: primary, level: isOpen(level) ? level : 50, notes: [...new Set(notes)] };
+}
+
+// The position for one candidate mon out: your side, its side, the field;
+// one entry per combination of unknown sleep counters.
+function startMix(form, team, opp, run, notes) {
   let s = teamStart({ team, opp, oppReserves: 2 }, form.active);
   const statusOf = (st) => (st === "toxic" ? "poison" : st || null);
   const mine = form.mons[form.active];
@@ -197,7 +279,6 @@ export function buildPosition(form) {
   });
   s.yourUsablePartyMons = s.youBench.filter((e) => e && e.hpPct > 0).length;
 
-  // Sleep: one position per combination of counters still possible.
   let start = [{ p: 1, state: s }];
   const sleepers = [];
   if (s.youStatus === "sleep") sleepers.push({ key: "youSleepTurns", counters: sleepCounters(mine.sleep, team[form.active]) });
@@ -207,37 +288,29 @@ export function buildPosition(form) {
   }
   if (start.length > MAX_SLEEP_VARIANTS) throw new Error(`too many unknown sleep lengths at once (${start.length} combinations)`);
   if (start.length > 1) notes.push(`Sleep length unknown: averaged over ${start.length} possible counters.`);
-
-  // Their party: what you have seen, the rest from the trainer draw.
-  const lv = isOpen(level) ? { level } : {};
-  if (!brain && !(run.challenge && run.battle)) throw new Error("pick the challenge and battle (they decide who the unseen teammates can be)");
-  const mix = partyMix({ lead, seen: distinct.filter((k) => k !== lead), challenge: run.challenge, battle: run.battle, brain, ivs: form.opp.ivTier, ...lv });
-  const known = { [active]: { mon: opp } };
-  if (lead !== active) known[lead] = { hpPct: form.party.leadHpPct ?? 100 };
-  for (const o of others) known[o.setKey] = { hpPct: o.hpPct ?? 100 };
-  const unseen = 3 - distinct.length;
-  if (unseen > 0 && !brain) notes.push(`Their ${unseen === 1 ? "last Pokémon is" : "other two are"} unknown: averaged over the ${mix.length.toLocaleString()} parties this trainer draw allows (which mon came in when is not used as evidence).`);
-  const gn = genderNote(team, form.active, opp);
-  if (gn) notes.push(gn);
-  return { team, opp, start, mix, known, active, level: isOpen(level) ? level : 50, notes };
+  return start;
 }
 
 // ── the readout ────────────────────────────────────────────────────────────
-// The opponent's action this turn over the start mix (unknown sleep lengths):
-// { rows: [{ label, p, kind }], pSwitch, refused }.
+// The opponent's action this turn over the candidates and each one's start
+// mix: { rows: [{ label, p, kind }], pSwitch, refused }.
 export function readout(pos) {
   const acc = new Map();
   let pSwitch = 0, refused = 0;
-  for (const { p, state } of pos.start) {
-    const r = oppReadout({ team: pos.team, s: state, mix: pos.mix, known: pos.known, active: pos.active, level: pos.level });
-    pSwitch += p * r.pSwitch;
-    refused = Math.max(refused, r.refused);
-    for (const x of r.rows) {
-      const label = x.kind === "move" ? x.move : `Switch to ${setLabel(x.key)}`;
-      const e = acc.get(label);
-      if (e) e.p += p * x.p; else acc.set(label, { label, p: p * x.p, kind: x.kind });
+  for (const c of pos.cands) {
+    for (const { p, state } of c.start) {
+      const w = c.w * p;
+      const r = oppReadout({ team: pos.team, s: state, mix: c.mix, known: c.known, active: c.key, level: pos.level });
+      pSwitch += w * r.pSwitch;
+      refused = Math.max(refused, r.refused);
+      for (const x of r.rows) {
+        const label = x.kind === "move" ? x.move : `Switch to ${setLabel(x.key)}`;
+        const e = acc.get(label);
+        if (e) e.p += w * x.p; else acc.set(label, { label, p: w * x.p, kind: x.kind });
+      }
     }
   }
   return { rows: [...acc.values()].sort((a, b) => b.p - a.p), pSwitch, refused };
 }
+
 export const pct = (x, digits = 0) => `${(100 * x).toFixed(digits)}%`;

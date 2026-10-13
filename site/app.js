@@ -3,7 +3,7 @@
 // engine. The readout is cheap (well under a second), so it reruns on every
 // change.
 
-import { parseTeam, setChoices, setLabel, ivTierOdds, buildOpponent, buildPosition, readout, pct, STAGE_KEYS, brainFor, genderOf } from "./ui-logic.js";
+import { parseTeam, setChoices, setLabel, ivTierOdds, buildOpponent, buildPosition, readout, pct, STAGE_KEYS, brainFor, genderOf, trainerChoices, sameSpecies } from "./ui-logic.js";
 import { FRONTIER_POOL } from "../engine/frontier-pool.js";
 import { buildPlayerMon } from "../engine/team.js";
 
@@ -16,6 +16,10 @@ let teamCfgs = null;      // parsed configs
 let monState = [];        // per team member: { hpPct, status, toxicTurns, sleepRest, slept, itemGone }
 let active = 0;
 const labelToKey = new Map();
+const trainerByLabel = new Map(); // "Miriam (Cooltrainer)" -> trainer id
+let trainerLabels = [];
+let candTicks = new Set();        // the "Could be" sets ticked (the set out is always in)
+let candFor = null;               // the set + trainer the ticks were made for
 
 // ── small builders ─────────────────────────────────────────────────────────
 const opt = (v, t, sel = false) => `<option value="${v}"${sel ? " selected" : ""}>${t}</option>`;
@@ -119,14 +123,26 @@ function readMons() {
 // ── the opponent ───────────────────────────────────────────────────────────
 const levelNow = () => Number(document.querySelector('input[name="level"]:checked').value);
 function runInputs() {
-  return { challenge: Number($("challenge").value), battle: Number($("battle").value), brain: $("brain").value || null,
+  const brain = $("brain").value || null;
+  return { challenge: Number($("challenge").value), battle: Number($("battle").value), brain,
+    trainerId: brain ? null : trainerByLabel.get($("trainer").value.trim()) ?? null,
     level: levelNow(), turn: Math.max(1, Number($("turn").value) || 1) };
+}
+// The trainers this battle can draw; a picked one no longer among them is cleared.
+function refreshTrainerList() {
+  const { challenge, battle, brain } = runInputs();
+  const ts = trainerChoices({ challenge, battle });
+  trainerByLabel.clear();
+  for (const t of ts) trainerByLabel.set(t.label, t.id);
+  trainerLabels = ts.map((t) => t.label);
+  $("trainerRow").hidden = !!brain;
+  if ($("trainer").value && !trainerByLabel.has($("trainer").value.trim())) combos.trainer.set("");
 }
 let setLabels = [];
 function refreshSetList() {
-  const { challenge, battle, brain, level } = runInputs();
-  const keys = setChoices({ challenge, battle, bracketOnly: $("bracketOnly").checked, brain, level });
-  $("bracketRow").hidden = !!brain;
+  const { challenge, battle, brain, level, trainerId } = runInputs();
+  const keys = setChoices({ challenge, battle, bracketOnly: $("bracketOnly").checked, brain, level, trainerId });
+  $("bracketRow").hidden = !!brain || trainerId != null;
   labelToKey.clear();
   setLabels = keys.map((k) => { labelToKey.set(setLabel(k), k); return setLabel(k); });
   // keep every set resolvable by name even when filtered out of the list
@@ -138,11 +154,13 @@ const combos = {};
 // Brain on/off: the list becomes her three; her lead goes in the "out now"
 // box (it is always her first), and a set that no longer fits is cleared.
 function brainChanged() {
-  const { brain } = runInputs();
+  const { brain, trainerId } = runInputs();
   refreshSetList();
+  // with a Brain or a known trainer the list is that team / pool: a set outside it goes
+  const narrow = !!brain || trainerId != null;
   for (const id of ["oppSet", "leadSet", "other1Set", "other2Set"]) {
     const cur = keyOf($(id).value);
-    if (cur && (brain ? !setLabels.includes(setLabel(cur)) : FRONTIER_POOL[cur].brain)) combos[id].set("");
+    if (cur && (narrow ? !setLabels.includes(setLabel(cur)) : FRONTIER_POOL[cur].brain)) combos[id].set("");
   }
   if (brain && !keyOf($("oppSet").value)) { combos.oppSet.set(setLabels[0]); $("oppIsLead").checked = true; syncLeadRow(); }
   renderOppSet();
@@ -154,7 +172,7 @@ function syncLeadRow() { $("leadRow").hidden = $("oppIsLead").checked; }
 // arrows + Enter or a click pick, Escape closes. Picking fires a real
 // "change". Leaving with text that is not a set puts back the last set picked
 // -- or, with allowEmpty, leaves the box empty when the text was cleared.
-function setupCombo(inputId, listId, { allowEmpty = false } = {}) {
+function setupCombo(inputId, listId, { allowEmpty = false, source = () => setLabels, valid = keyOf } = {}) {
   const input = $(inputId), list = $(listId);
   let hi = -1, last = input.value;
   combos[inputId] = { set: (v) => { input.value = v; last = v; } };
@@ -163,8 +181,9 @@ function setupCombo(inputId, listId, { allowEmpty = false } = {}) {
   const mark = (items) => { items.forEach((el, i) => el.classList.toggle("hi", i === hi)); if (hi >= 0) items[hi].scrollIntoView({ block: "nearest" }); };
   function render(all) {
     const q = all ? "" : input.value.trim().toLowerCase();
-    const starts = setLabels.filter((o) => o.toLowerCase().startsWith(q));
-    const rest = q ? setLabels.filter((o) => !o.toLowerCase().startsWith(q) && o.toLowerCase().includes(q)) : [];
+    const all_ = source();
+    const starts = all_.filter((o) => o.toLowerCase().startsWith(q));
+    const rest = q ? all_.filter((o) => !o.toLowerCase().startsWith(q) && o.toLowerCase().includes(q)) : [];
     const matches = starts.concat(rest);
     hi = -1;
     list.innerHTML = matches.length ? matches.map((o) => `<div class="combo-item${o === last ? " cur" : ""}" data-value="${o}">${o}</div>`).join("")
@@ -186,13 +205,14 @@ function setupCombo(inputId, listId, { allowEmpty = false } = {}) {
   input.addEventListener("blur", () => setTimeout(() => {
     close();
     if (allowEmpty && input.value.trim() === "") { if (last !== "") { last = ""; input.value = ""; input.dispatchEvent(new Event("change", { bubbles: true })); } return; }
-    if (input.value !== last && !keyOf(input.value)) { input.value = last; input.dispatchEvent(new Event("change", { bubbles: true })); }
+    if (input.value !== last && !valid(input.value)) { input.value = last; input.dispatchEvent(new Event("change", { bubbles: true })); }
     else last = input.value;
   }, 150));
 }
 function renderOppSet() {
   const key = keyOf($("oppSet").value);
   const e = key ? FRONTIER_POOL[key] : null;
+  const run = runInputs();
   $("oppCard").hidden = !e; $("oppAbilityRow").hidden = !e || e.abilities.length < 2; $("oppIvRow").hidden = !e;
   $("oppGenderRow").hidden = !e || !!genderOf(buildOpponent({ setKey: key, ability: e.abilities[0], ivTier: 31, level: 100 }));
   if (!e) return;
@@ -200,12 +220,38 @@ function renderOppSet() {
     <div class="sc-meta"><b>${e.item ?? "no item"}</b> · <b>${e.nature}</b> · ${e.abilities.join(" / ")}</div>
     <div class="sc-meta">${e.moves.join(" · ")}</div>`;
   const prevAb = $("oppAbility").value;
-  $("oppAbility").innerHTML = e.abilities.map((a) => opt(a, a, a === prevAb)).join("");
-  const odds = ivTierOdds(key, runInputs());
+  $("oppAbility").innerHTML = (e.abilities.length > 1 ? opt("", "Not seen (either)") : "") + e.abilities.map((a) => opt(a, a, a === prevAb)).join("");
+  // The "Could be" ticks: reset for a new set or trainer -- every set of the
+  // species in a known trainer's pool (honest doubt), else just the one typed.
+  const forKey = `${key}|${run.trainerId}|${run.brain}`;
+  if (candFor !== forKey) {
+    candFor = forKey;
+    const same = sameSpecies(key, run);
+    candTicks = new Set(run.trainerId != null ? same : [key]);
+  }
+  renderCands(null);
+  const odds = ivTierOdds(key, run);
   const prevIv = $("oppIv").value;
   if (e.brain) { $("oppIv").innerHTML = opt(e.fixedIV, `${e.fixedIV} (fixed: Frontier Brain)`, true); return; }
+  if (run.trainerId != null) { $("oppIv").innerHTML = opt(odds[0].iv, `${odds[0].iv} (this trainer's)`, true); return; }
   const tiers = odds.length ? odds : (e.ivTiers ?? [31]).map((iv) => ({ iv, p: null }));
   $("oppIv").innerHTML = tiers.map((t, i) => opt(t.iv, `${t.iv}${t.p != null ? ` (${pct(t.p)}${i === 0 ? ", most likely" : ""})` : ""}`, String(t.iv) === prevIv)).join("");
+}
+
+// The "Could be" list: every set of the species out in the pool, ticked or
+// not, with its odds once the readout has them (setOdds; null = not yet).
+function renderCands(setOdds) {
+  const key = keyOf($("oppSet").value);
+  const same = key ? sameSpecies(key, runInputs()) : [];
+  $("candBlock").hidden = same.length < 2;
+  if (same.length < 2) return;
+  const pOf = (k) => setOdds?.find((x) => x.key === k)?.p;
+  $("candList").innerHTML = same.map((k) => {
+    const e = FRONTIER_POOL[k], on = k === key || candTicks.has(k), p = pOf(k);
+    return `<div class="cand-row${on ? "" : " out"}"><input type="checkbox" class="trigger cand-tick" id="cand-${e.index}" data-key="${k}"${on ? " checked" : ""}${k === key ? " disabled" : ""} />
+      <span class="cand-p">${on && p != null ? pct(p) : ""}</span><label for="cand-${e.index}" class="cand-name">${setLabel(k)}</label>
+      <span class="cand-meta">${e.item ?? "no item"} · ${e.moves.join(" / ")}</span></div>`;
+  }).join("");
 }
 
 // ── the form ───────────────────────────────────────────────────────────────
@@ -228,7 +274,7 @@ function readForm() {
     you: { stages: readStages("ys"), confused: Number($("youConfused").value), subPct: Number($("youSub").value) || 0,
       firstTurn: fresh, lastMove: fresh ? null : $("youLastMove").value || null, landed: $("youLanded").checked,
       seen: fresh ? [] : [...document.querySelectorAll("#youSeen input:checked")].map((el) => el.value) },
-    opp: { setKey: oppKey, ability: $("oppAbility").value || null, ivTier: Number($("oppIv").value) || 31, gender: $("oppGender").value || null,
+    opp: { setKey: oppKey, candidates: sameSpecies(oppKey, runInputs()).filter((k) => k === oppKey || candTicks.has(k)), ability: $("oppAbility").value || null, ivTier: Number($("oppIv").value) || 31, gender: $("oppGender").value || null,
       hpPct: Math.max(1, Math.min(100, Number($("oppHp").value) || 100)),
       status: $("o-status").value, toxicTurns: Number($("o-toxic").value),
       sleep: { rest: $("o-sleepFrom").value === "rest", slept: Number($("o-slept").value) },
@@ -250,11 +296,12 @@ function refresh() {
   try {
     const key = keyOf($("oppSet").value);
     if (key) {
-      const o = buildOpponent({ setKey: key, ability: $("oppAbility").value || null, ivTier: Number($("oppIv").value) || 31, gender: $("oppGender").value || null, level: levelNow() });
+      const o = buildOpponent({ setKey: key, ability: $("oppAbility").value || FRONTIER_POOL[key].abilities[0], ivTier: Number($("oppIv").value) || 31, gender: $("oppGender").value || null, level: levelNow() });
       $("oppHpAbs").textContent = `${Math.round(((Number($("oppHp").value) || 100) / 100) * o.stats.hp)}/${o.stats.hp}`;
     }
     const pos = buildPosition(readForm());
     const r = readout(pos);
+    renderCands(pos.setOdds);
     $("oppChoices").innerHTML = r.rows.slice(0, 10).map((x) => `<div class="cb-row${x.kind === "switch" ? " cb-switch" : ""}"><div class="cb-name"><div class="cb-fill" style="width:${(100 * x.p).toFixed(1)}%"></div><span>${x.label}</span></div><div class="cb-p">${pct(x.p, x.p < 0.01 && x.p > 0 ? 1 : 0)}</div></div>`).join("")
       + (r.rows.length > 10 ? `<div class="notes">+ ${r.rows.length - 10} more, together ${pct(r.rows.slice(10).reduce((a, x) => a + x.p, 0), 1)}</div>` : "");
     $("switchLine").textContent = r.pSwitch > 0 ? `Switches out: ${pct(r.pSwitch, 1)} in all` : "It does not switch out this turn.";
@@ -272,9 +319,15 @@ function init() {
   stageGrid($("youStages"), "ys"); stageGrid($("oppStages"), "os");
   $("oppStatusRows").innerHTML = statusRows("o");
   sideRows($("youSide"), "you"); sideRows($("oppSide"), "opp");
-  refreshSaved(); refreshSetList();
+  refreshSaved();
   setupCombo("oppSet", "oppSetList"); setupCombo("leadSet", "leadSetList");
   setupCombo("other1Set", "other1SetList", { allowEmpty: true }); setupCombo("other2Set", "other2SetList", { allowEmpty: true });
+  setupCombo("trainer", "trainerList", { allowEmpty: true, source: () => trainerLabels, valid: (v) => trainerByLabel.has(v.trim()) });
+  refreshTrainerList(); refreshSetList();
+  $("candList").addEventListener("change", (e) => {
+    if (!e.target.classList.contains("cand-tick")) return;
+    if (e.target.checked) candTicks.add(e.target.dataset.key); else candTicks.delete(e.target.dataset.key);
+  });
 
   $("parseTeam").addEventListener("click", () => useTeam($("teamText").value));
   $("saveTeam").addEventListener("click", () => {
@@ -307,9 +360,10 @@ function init() {
     if (e.target.id === "oppIsLead") syncLeadRow();
     if (e.target.id === "oppSet" && e.type === "change") $("oppGender").value = ""; // a new mon
     if (["challenge", "battle"].includes(e.target.id) && e.type === "change") $("brain").value = brainFor(runInputs()) ?? "";
-    if (["challenge", "battle", "brain"].includes(e.target.id)) brainChanged();
+    if (["challenge", "battle", "brain"].includes(e.target.id)) { refreshTrainerList(); brainChanged(); }
+    else if (e.target.id === "trainer" && e.type === "change") brainChanged();
     else if (e.target.id === "bracketOnly" || e.target.name === "level") refreshSetList();
-    if (["oppSet", "challenge", "battle"].includes(e.target.id) || e.target.name === "level") renderOppSet();
+    if (["oppSet", "challenge", "battle", "trainer"].includes(e.target.id) || e.target.name === "level") renderOppSet();
     clearTimeout(refresh.t); refresh.t = setTimeout(refresh, 120);
   });
 }

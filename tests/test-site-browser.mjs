@@ -99,12 +99,43 @@ try {
   await page.fill("#other1Set", ""); await page.click("h1"); await page.waitForTimeout(600);
   ok(same(await barsOf(page), expectBars(r2)), "clearing the other seen restores the readout");
 
+  // A known trainer whose pool holds several sets of one species: the set
+  // list narrows to its pool, the IVs are its own, every same-species set is
+  // ticked with its odds, and the bars = readout over them.
+  const N = await import(pathToFileURL(path.join(ROOT, "engine/next-in.js")).href);
+  const { FRONTIER_POOL } = await import(pathToFileURL(path.join(ROOT, "engine/frontier-pool.js")).href);
+  const pick = N.trainerPrior({ challenge: 7, battle: 1 }).map(({ id }) => {
+    const keys = U.setChoices({ trainerId: id });
+    const sp = keys.map((k) => FRONTIER_POOL[k].species).find((x, i, a) => a.indexOf(x) !== i);
+    return sp ? { id, keys, same: keys.filter((k) => FRONTIER_POOL[k].species === sp) } : null;
+  }).find(Boolean);
+  await page.fill("#other1Set", ""); await page.fill("#turn", "1"); await page.check("#youFirstTurn"); await page.check("#oppFirstTurn");
+  await page.click("#trainer"); await page.keyboard.type(U.trainerLabel(pick.id).toLowerCase()); await page.keyboard.press("Enter"); await page.waitForTimeout(500);
+  ok(await page.inputValue("#trainer") === U.trainerLabel(pick.id) && await page.locator("#bracketRow").isHidden(), `trainer picked: ${U.trainerLabel(pick.id)}`);
+  ok(await page.inputValue("#oppSet") === "", "the set out (not in its pool) is cleared");
+  await page.click("#oppSet");
+  ok(await page.locator("#oppSetList .combo-item").count() === pick.keys.length, `the set list is its pool (${pick.keys.length})`);
+  await page.keyboard.type(pick.same[0].toLowerCase()); await page.keyboard.press("Enter"); await page.waitForTimeout(700);
+  ok((await page.textContent("#oppIv")).startsWith(`${N.fixedIvs(pick.id)} (this trainer`), `IVs: the trainer's (${N.fixedIvs(pick.id)})`);
+  const ticked = await page.$$eval("#candList .cand-tick", (els) => els.filter((e) => e.checked).map((e) => e.dataset.key));
+  ok(ticked.join() === pick.same.join(), `could be: all of ${pick.same.join(", ")} ticked`);
+  const formT = { ...form1, opp: oppForm({ setKey: pick.same[0], candidates: pick.same, ability: null, ivTier: N.fixedIvs(pick.id) }), run: { challenge: 7, battle: 1, turn: 1, level: 50, trainerId: pick.id } };
+  const posT = U.buildPosition(formT), rT = U.readout(posT);
+  ok(same(await barsOf(page), expectBars(rT)), `bars = readout over the candidates (${(await barsOf(page)).map((b) => b.join(" ")).join(", ")})`);
+  const shown = await page.$$eval("#candList .cand-row", (rows) => rows.map((r) => r.querySelector(".cand-p").textContent));
+  ok(shown.join() === pick.same.map((k) => U.pct(posT.setOdds.find((x) => x.key === k).p)).join(), `odds shown: ${shown.join(", ")}`);
+  await page.uncheck(`#cand-${FRONTIER_POOL[pick.same[1]].index}`); await page.waitForTimeout(700);
+  const rU = U.readout(U.buildPosition({ ...formT, opp: { ...formT.opp, candidates: pick.same.filter((k) => k !== pick.same[1]) } }));
+  ok(same(await barsOf(page), expectBars(rU)), `unticking ${pick.same[1]}: bars = readout without it`);
+  await page.fill("#trainer", ""); await page.click("h1"); await page.waitForTimeout(500);
+  ok(await page.locator("#bracketRow").isVisible(), "clearing the trainer brings the bracket filter back");
+
   // Anabel: challenge 5, battle 7 -- picked for you, her lead, IVs fixed.
   await page.selectOption("#challenge", "5"); await page.selectOption("#battle", "7"); await page.waitForTimeout(600);
   ok(await page.inputValue("#brain") === "Anabel Silver" && await page.inputValue("#oppSet") === "Anabel Silver Alakazam"
     && (await page.textContent("#oppIv")).startsWith("24 (fixed") && await page.locator("#bracketRow").isHidden(), "challenge 5 battle 7: Anabel Silver, Alakazam, IV 24 fixed");
   const abA = await page.inputValue("#oppAbility");
-  const formA = { ...form2, opp: oppForm({ setKey: "Anabel Silver Alakazam", ability: abA, ivTier: 24, firstTurn: false }), run: { challenge: 5, battle: 7, turn: 2, brain: "Anabel Silver", level: 50 } };
+  const formA = { ...form1, opp: oppForm({ setKey: "Anabel Silver Alakazam", ability: abA || null, ivTier: 24 }), run: { challenge: 5, battle: 7, turn: 1, brain: "Anabel Silver", level: 50 } }; // turn 1 again: the trainer section reset it
   const rA = U.readout(U.buildPosition(formA));
   ok(same(await barsOf(page), expectBars(rA)), `Anabel's Alakazam: bars = readout (${(await barsOf(page)).map((b) => b.join(" ")).join(", ")})`);
 
