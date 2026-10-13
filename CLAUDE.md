@@ -17,10 +17,13 @@ invent or randomise behaviour.
 1. **Opponent-move readout** -- DONE (this commit series). For a position you
    enter, the opponent's action this turn: every move and every switch with
    its probability.
-2. **Belief over sets across turns** -- the tower_predictor_sim posterior,
-   moved here and updated every turn (each observed action weighed by how
-   likely that set's AI was to choose it); slots 2-3 (DEFERRED.md D1 there).
-3. **1-2 turn advisor** -- expectimax over YOUR actions against the AI as a
+2. **REVISED (user, 2026-10-12): no full set posterior** -- the user's
+   facilities-assistant already pins the set when the species is unique for
+   the trainer. Instead, DONE: (a) a TRAINER PICKER (the trainer's own pool,
+   its fixed IVs, its parties only) and (b) "COULD BE": the other sets of the
+   species out, ticked, weighted by the trainer draw (partyMix's `mass`), the
+   readout averaged over them; ability "Not seen (either)" averages abilities.
+3. **1-2 turn advisor** (NEXT) -- expectimax over YOUR actions against the AI as a
    known random policy (not minimax), using that belief.
 4. **Full-battle solve** -- depth-limited search + playouts (palace-solver's
    solve-core / montecarlo machinery), maybe a streak sim.
@@ -42,6 +45,14 @@ docs/PROVENANCE.md). Tower changes since:
   party orderings (next-in.js teammateDist) holding every seen mon, filtered
   to the IVs entered. `oppReadout(...)`: the action summed over those parties
   and the unseen teammates' abilities (50/50, personality & 1).
+- Candidate odds (site/ui-logic.js buildPosition): P(set k, ability a) is
+  proportional to partyMix(...).mass / #abilities -- mass = sum over trainers (or the
+  one known) of P(trainer) x P(lead k | trainer) x P(seen mons | trainer,
+  lead k), with the IV filter; next-in.js teammateDist now returns that
+  `mass` (the normaliser it used to divide out). Default ticks: every
+  same-species set of a KNOWN trainer's pool; with no trainer only the set
+  typed (bracket-wide would mix too much). engine/trainer-classes.js
+  (generated, tools/gen-trainer-classes.mjs) names classes for the page.
 - `engine/next-in.js`: Anabel's two teams added to BRAIN_TEAMS (frontier_util.c
   99-176; appearances {35, 70, 35, 1}, :88). Spenser's stay (inherited tests).
 - `site/`: the Tower page (Palace layout, steel-blue theme; contrast in the
@@ -66,8 +77,8 @@ New / replaced:
 | test | what it pins |
 |---|---|
 | test-tower | 30: corpus (903 positions, 300 Frontier-vs-Frontier walks played with towerChoices both sides): sums, only selectable moves, unforced = the interpreter with no mask, player side = mirrored opponent; forced paths in source order (lock, Struggle-before-Encore, Encore), Disable / Choice lock / 0 PP; oppActions = ShouldSwitch x move; partyMix vs teammateDist, seen filter, IV filter, Anabel, errors; history (Protect seen -> SolarBeam down, AI_CV_ChargeUpMove), an unseen teammate's ability (Arcanine 3 Flash Fire, worked form by form), bench count (Baton Pass -10 with no usable teammate); readout vs 6,000 parties from the LITERAL FillTrainerParty loop (rejection-sampled, abilities drawn) within 4 sd |
-| test-ui-logic | 30: every page input onto its engine field; party inputs -> partyMix / known; readout = oppReadout over the sleep mix |
-| test-site-browser | 19: the page in headless Chromium (Playwright from battle_arena_sim/node_modules): bars = Node readout at turn 1, after a landed Earthquake (switch rows), with an "also seen" mon, after clearing it, at Anabel's battle; saved team over a reload; no page error |
+| test-ui-logic | 43: every page input onto its engine field; party inputs -> partyMix / known; readout = oppReadout over the sleep mix; trainer list / labels / pool / IVs; candidate odds = pool shares (trainer known), = the bracket draw worked by hand, moved by a seen teammate (worked trainer by trainer); readout over candidates = their weighted readouts. tools/mutate-ui.py 6/6 |
+| test-site-browser | 28 (+9 trainer / candidates): the page in headless Chromium (Playwright from battle_arena_sim/node_modules): bars = Node readout at turn 1, after a landed Earthquake (switch rows), with an "also seen" mon, after clearing it, at Anabel's battle; saved team over a reload; no page error |
 
 Mutations (tools/mutate-tower.py, tower.js): 6/8 caught. The 2 missed are
 equivalent: (a) skipping aiDecisionState inside towerChoices -- buildAiView

@@ -137,5 +137,6 @@ input[type="number"].hp-small { width: 58px; }
 .cand-block { margin: -4px 0 10px; }
 .cand-row { display: flex; align-items: baseline; gap: 6px; font-size: 13px; margin-bottom: 4px; }
 .cand-row .cand-p { color: var(--accent); min-width: 44px; text-align: right; }
+.cand-row .cand-name { white-space: nowrap; }
 .cand-row .cand-meta { color: var(--muted); }
 .cand-row.out .cand-name, .cand-row.out .cand-meta { opacity: 0.55; }
