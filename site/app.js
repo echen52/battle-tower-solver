@@ -1,22 +1,20 @@
 // ── app.js ─────────────────────────────────────────────────────────────────
 // The page's DOM wiring. All battle logic is in ui-logic.js (pure) and the
-// engine; the solve runs in Web Workers (solver.js).
+// engine. The readout is cheap (well under a second), so it reruns on every
+// change.
 
-import { parseTeam, setChoices, setLabel, ivTierOdds, buildOpponent, buildFight, turnChoices, resultRows, verdict, pct, STAGE_KEYS, brainFor, genderOf, buildSendIn, decideSendIn } from "./ui-logic.js";
-import { solveInBrowser } from "./solver.js";
+import { parseTeam, setChoices, setLabel, ivTierOdds, buildOpponent, buildPosition, readout, pct, STAGE_KEYS, brainFor, genderOf } from "./ui-logic.js";
 import { FRONTIER_POOL } from "../engine/frontier-pool.js";
-import { palaceMoveGroup, GROUP_NAMES } from "../engine/palace.js";
 import { buildPlayerMon } from "../engine/team.js";
 
 const $ = (id) => document.getElementById(id);
-const STORE = "palaceSolver.savedTeams";
+const STORE = "towerSolver.savedTeams"; // all echen52 Pages sites share one origin: the prefix keeps it apart
 const STAGE_LABEL = { atk: "Atk", def: "Def", spa: "SpA", spd: "SpD", spe: "Spe", accuracy: "Acc", evasion: "Eva" };
 const STATUS_OPTIONS = [["", "Healthy"], ["poison", "Poison"], ["toxic", "Bad poison"], ["burn", "Burn"], ["paralysis", "Paralysis"], ["sleep", "Sleep"], ["freeze", "Freeze"]];
 
 let teamCfgs = null;      // parsed configs
 let monState = [];        // per team member: { hpPct, status, toxicTurns, sleepRest, slept, itemGone }
 let active = 0;
-let solving = null;       // AbortController while a solve runs
 const labelToKey = new Map();
 
 // ── small builders ─────────────────────────────────────────────────────────
@@ -29,7 +27,7 @@ const readStages = (prefix) => Object.fromEntries(STAGE_KEYS.map((k) => [k, Numb
 function statusRows(prefix) {
   return `<div class="field-row"><label for="${prefix}-status">Status</label><select class="trigger" id="${prefix}-status">${
     STATUS_OPTIONS.map(([v, t]) => opt(v, t)).join("")}</select></div>
-  <div class="field-row" id="${prefix}-sleepRow" hidden><label title="The game hides how long a sleep lasts; the solve averages over every length still possible.">Asleep</label>
+  <div class="field-row" id="${prefix}-sleepRow" hidden><label title="The game hides how long a sleep lasts; the readout averages over every length still possible.">Asleep</label>
     <select class="trigger" id="${prefix}-sleepFrom">${opt("move", "from a move")}${opt("rest", "from Rest")}</select>
     <select class="trigger" id="${prefix}-slept">${[0, 1, 2, 3].map((n) => opt(n, `${n} turn${n === 1 ? "" : "s"} slept`)).join("")}</select></div>
   <div class="field-row" id="${prefix}-toxicRow" hidden><label>Bad poison</label>
@@ -93,6 +91,20 @@ function renderTeam() {
   });
   $("activeBlock").hidden = false;
   $("activeName").textContent = teamCfgs[active].species;
+  // What the AI knows of the mon out: reset when another mon comes in.
+  const moves = teamCfgs[active].moves;
+  $("youLastMove").innerHTML = opt("", "None yet") + moves.map((m) => opt(m, m)).join("");
+  $("youSeen").innerHTML = moves.map((m, j) => `<span class="seen-move"><input type="checkbox" class="trigger" id="seen-${j}" value="${m}" /><label for="seen-${j}" class="chk-label">${m}</label></span>`).join("");
+  $("youFirstTurn").checked = true;
+  syncHistoryRows();
+}
+// "Just came in": no move used yet, so nothing to remember.
+function syncHistoryRows() {
+  const fresh = $("youFirstTurn").checked;
+  $("lastMoveRow").hidden = fresh; $("seenRow").hidden = fresh;
+  // the last move is one the AI has seen
+  const last = $("youLastMove").value;
+  document.querySelectorAll("#youSeen input").forEach((el) => { if (el.value === last) el.checked = true; });
 }
 function readMons() {
   return teamCfgs.map((_, i) => ({
@@ -107,9 +119,10 @@ function readMons() {
 // ── the opponent ───────────────────────────────────────────────────────────
 const levelNow = () => Number(document.querySelector('input[name="level"]:checked').value);
 function runInputs() {
-  return { challenge: Number($("challenge").value), battle: Number($("battle").value),
-    oppIndex: Number(document.querySelector('input[name="oppIndex"]:checked').value), brain: $("brain").value || null, level: levelNow() };
+  return { challenge: Number($("challenge").value), battle: Number($("battle").value), brain: $("brain").value || null,
+    level: levelNow(), turn: Math.max(1, Number($("turn").value) || 1) };
 }
+let setLabels = [];
 function refreshSetList() {
   const { challenge, battle, brain, level } = runInputs();
   const keys = setChoices({ challenge, battle, bracketOnly: $("bracketOnly").checked, brain, level });
@@ -120,33 +133,31 @@ function refreshSetList() {
   for (const k of Object.keys(FRONTIER_POOL)) if (!labelToKey.has(setLabel(k))) labelToKey.set(setLabel(k), k);
 }
 const keyOf = (label) => labelToKey.get(label.trim()) ?? null;
-let setLabels = [];
 const combos = {};
 
-// Spenser on/off (by hand, or because the challenge/battle is his): the list
-// becomes his three; the set box gets his lead when you face their 1st, and is
-// cleared when it holds a set that no longer fits (his lead as 2nd/3rd, or a
-// Brain set once the Brain is off).
+// Brain on/off: the list becomes her three; her lead goes in the "out now"
+// box (it is always her first), and a set that no longer fits is cleared.
 function brainChanged() {
-  const { brain, oppIndex } = runInputs();
+  const { brain } = runInputs();
   refreshSetList();
-  const cur = keyOf($("oppSet").value);
-  if (brain && oppIndex === 1) combos.oppSet.set(setLabels[0]); // his lead is always slot 0
-  else if (cur && (brain ? setLabels.indexOf(setLabel(cur)) < 1 : FRONTIER_POOL[cur].brain)) combos.oppSet.set("");
-  $("leadRow").hidden = oppIndex !== 2 || !!brain;
+  for (const id of ["oppSet", "leadSet", "other1Set", "other2Set"]) {
+    const cur = keyOf($(id).value);
+    if (cur && (brain ? !setLabels.includes(setLabel(cur)) : FRONTIER_POOL[cur].brain)) combos[id].set("");
+  }
+  if (brain && !keyOf($("oppSet").value)) { combos.oppSet.set(setLabels[0]); $("oppIsLead").checked = true; syncLeadRow(); }
   renderOppSet();
 }
+function syncLeadRow() { $("leadRow").hidden = $("oppIsLead").checked; }
 
 // Filtering dropdown for the set pickers (as on the Arena page): focus shows
 // the whole list, typing narrows it (names starting with the text first),
-// arrows + Enter or a click pick (Enter alone takes the top match), Escape
-// closes. Picking fires a real
-// "change" on the input, so the usual listeners run; leaving with text that
-// is not a set puts back the last set picked.
-function setupCombo(inputId, listId) {
+// arrows + Enter or a click pick, Escape closes. Picking fires a real
+// "change". Leaving with text that is not a set puts back the last set picked
+// -- or, with allowEmpty, leaves the box empty when the text was cleared.
+function setupCombo(inputId, listId, { allowEmpty = false } = {}) {
   const input = $(inputId), list = $(listId);
   let hi = -1, last = input.value;
-  combos[inputId] = { set: (v) => { input.value = v; last = v; } }; // set from code, no "change"
+  combos[inputId] = { set: (v) => { input.value = v; last = v; } };
   const close = () => { list.classList.remove("open"); list.innerHTML = ""; hi = -1; };
   const choose = (v) => { input.value = v; last = v; close(); input.dispatchEvent(new Event("change", { bubbles: true })); };
   const mark = (items) => { items.forEach((el, i) => el.classList.toggle("hi", i === hi)); if (hi >= 0) items[hi].scrollIntoView({ block: "nearest" }); };
@@ -163,7 +174,7 @@ function setupCombo(inputId, listId) {
     list.querySelector(".cur")?.scrollIntoView({ block: "nearest" });
   }
   input.addEventListener("focus", () => { input.select(); render(true); });
-  input.addEventListener("click", () => { if (!list.classList.contains("open")) { input.select(); render(true); } }); // already focused
+  input.addEventListener("click", () => { if (!list.classList.contains("open")) { input.select(); render(true); } });
   input.addEventListener("input", () => render(false));
   input.addEventListener("keydown", (e) => {
     const items = list.querySelectorAll(".combo-item");
@@ -174,6 +185,7 @@ function setupCombo(inputId, listId) {
   });
   input.addEventListener("blur", () => setTimeout(() => {
     close();
+    if (allowEmpty && input.value.trim() === "") { if (last !== "") { last = ""; input.value = ""; input.dispatchEvent(new Event("change", { bubbles: true })); } return; }
     if (input.value !== last && !keyOf(input.value)) { input.value = last; input.dispatchEvent(new Event("change", { bubbles: true })); }
     else last = input.value;
   }, 150));
@@ -182,11 +194,11 @@ function renderOppSet() {
   const key = keyOf($("oppSet").value);
   const e = key ? FRONTIER_POOL[key] : null;
   $("oppCard").hidden = !e; $("oppAbilityRow").hidden = !e || e.abilities.length < 2; $("oppIvRow").hidden = !e;
-  $("oppGenderRow").hidden = !e || !!genderOf(buildOpponent({ setKey: key, ability: e.abilities[0], ivTier: 31, level: 100 })); // gender does not depend on the level; 100 builds every set
+  $("oppGenderRow").hidden = !e || !!genderOf(buildOpponent({ setKey: key, ability: e.abilities[0], ivTier: 31, level: 100 }));
   if (!e) return;
   $("oppCard").innerHTML = `<div class="sc-title">${setLabel(key)}</div>
     <div class="sc-meta"><b>${e.item ?? "no item"}</b> · <b>${e.nature}</b> · ${e.abilities.join(" / ")}</div>
-    <div class="sc-meta">${e.moves.map((m) => `${m} <span class="pm">${GROUP_NAMES[palaceMoveGroup(m)]}</span>`).join(" · ")}</div>`;
+    <div class="sc-meta">${e.moves.join(" · ")}</div>`;
   const prevAb = $("oppAbility").value;
   $("oppAbility").innerHTML = e.abilities.map((a) => opt(a, a, a === prevAb)).join("");
   const odds = ivTierOdds(key, runInputs());
@@ -197,33 +209,39 @@ function renderOppSet() {
 }
 
 // ── the form ───────────────────────────────────────────────────────────────
-const tri = (v) => (v === "on" ? true : v === "off" ? false : null);
 function readForm() {
   if (!teamCfgs) throw new Error("Paste your team and press “Use team”.");
   const oppKey = keyOf($("oppSet").value);
   if (!oppKey) throw new Error("Pick the opponent's set.");
-  const run = runInputs();
-  if (run.oppIndex === 2 && !run.brain) run.leadKey = keyOf($("leadSet").value);
   const side = (s) => ({ reflect: $(`${s}-reflect`).checked, reflectTurns: Number($(`${s}-reflectTurns`).value),
     lightScreen: $(`${s}-ls`).checked, lightScreenTurns: Number($(`${s}-lsTurns`).value), spikes: Number($(`${s}-spikes`).value) });
+  const fresh = $("youFirstTurn").checked;
+  const hp = (id) => Math.max(0, Math.min(100, Number($(id).value)));
+  let lead = null;
+  if (!$("oppIsLead").checked) {
+    lead = keyOf($("leadSet").value);
+    if (!lead) throw new Error("Pick their lead (or tick “The one out is their lead”).");
+  }
+  const others = [1, 2].map((n) => ({ setKey: keyOf($(`other${n}Set`).value), hpPct: hp(`other${n}Hp`) })).filter((o) => o.setKey);
   return {
     team: teamCfgs, active, mons: readMons(),
-    you: { stages: readStages("ys"), confused: Number($("youConfused").value), subPct: Number($("youSub").value) || 0, lowHp: tri($("youLowHp").value) },
+    you: { stages: readStages("ys"), confused: Number($("youConfused").value), subPct: Number($("youSub").value) || 0,
+      firstTurn: fresh, lastMove: fresh ? null : $("youLastMove").value || null, landed: $("youLanded").checked,
+      seen: fresh ? [] : [...document.querySelectorAll("#youSeen input:checked")].map((el) => el.value) },
     opp: { setKey: oppKey, ability: $("oppAbility").value || null, ivTier: Number($("oppIv").value) || 31, gender: $("oppGender").value || null,
       hpPct: Math.max(1, Math.min(100, Number($("oppHp").value) || 100)),
       status: $("o-status").value, toxicTurns: Number($("o-toxic").value),
       sleep: { rest: $("o-sleepFrom").value === "rest", slept: Number($("o-slept").value) },
       itemGone: $("oppItemGone").checked, stages: readStages("os"), confused: Number($("oppConfused").value),
-      firstTurn: $("oppFirstTurn").checked, lowHp: tri($("oppLowHp").value) },
+      firstTurn: $("oppFirstTurn").checked },
+    party: { lead, leadHpPct: hp("leadHp"), others },
     field: { weather: $("weather").value, weatherTurns: $("weatherTurns").value ? Number($("weatherTurns").value) : null, you: side("you"), opp: side("opp") },
-    run,
+    run: runInputs(),
   };
 }
 
-// HP numbers next to the % boxes, and this turn's choices -- cheap, so on every change.
-let fight = null;
+// HP numbers next to the % boxes, and the readout -- on every change.
 function refresh() {
-  $("solveError").textContent = "";
   if (teamCfgs) teamCfgs.forEach((c, i) => {
     const mon = buildPlayerMon({ ...c, level: levelNow() });
     const hp = Math.max(0, Math.min(100, Number($(`m${i}-hp`).value) || 0));
@@ -235,102 +253,15 @@ function refresh() {
       const o = buildOpponent({ setKey: key, ability: $("oppAbility").value || null, ivTier: Number($("oppIv").value) || 31, gender: $("oppGender").value || null, level: levelNow() });
       $("oppHpAbs").textContent = `${Math.round(((Number($("oppHp").value) || 100) / 100) * o.stats.hp)}/${o.stats.hp}`;
     }
-    if ($("youFainted").checked) {
-      const c = buildSendIn(readForm());
-      fight = null;
-      $("youChoices").innerHTML = ""; $("oppChoices").innerHTML = "";
-      $("notes").textContent = `Send-in mode: Solve compares sending in ${c.map((x) => x.species).join(" and ")} (the time limit is shared).`;
-      return;
-    }
-    fight = buildFight(readForm());
-    const ch = turnChoices(fight.tctx, fight.start);
-    for (const side of ["you", "opp"]) {
-      $(`${side}Choices`).innerHTML = ch[side].slice(0, 8).map((r) => `<div class="cb-row"><div class="cb-name"><div class="cb-fill" style="width:${(100 * r.p).toFixed(1)}%"></div><span>${r.move}</span></div><div class="cb-p">${pct(r.p)}</div></div>`).join("");
-    }
-    $("notes").textContent = fight.notes.join(" ");
+    const pos = buildPosition(readForm());
+    const r = readout(pos);
+    $("oppChoices").innerHTML = r.rows.slice(0, 10).map((x) => `<div class="cb-row${x.kind === "switch" ? " cb-switch" : ""}"><div class="cb-name"><div class="cb-fill" style="width:${(100 * x.p).toFixed(1)}%"></div><span>${x.label}</span></div><div class="cb-p">${pct(x.p, x.p < 0.01 && x.p > 0 ? 1 : 0)}</div></div>`).join("")
+      + (r.rows.length > 10 ? `<div class="notes">+ ${r.rows.length - 10} more, together ${pct(r.rows.slice(10).reduce((a, x) => a + x.p, 0), 1)}</div>` : "");
+    $("switchLine").textContent = r.pSwitch > 0 ? `Switches out: ${pct(r.pSwitch, 1)} in all` : "It does not switch out this turn.";
+    $("notes").textContent = pos.notes.join(" ") + (r.refused > 0 ? ` Its AI first picked a move it cannot use ${pct(r.refused, 1)} of the time; the game asks it again, so those turns are shared out over the rest.` : "");
   } catch (e) {
-    fight = null;
-    $("youChoices").innerHTML = ""; $("oppChoices").innerHTML = "";
+    $("oppChoices").innerHTML = ""; $("switchLine").textContent = "";
     $("notes").textContent = e.message;
-  }
-}
-
-// ── solving ────────────────────────────────────────────────────────────────
-function renderResults(levers, info) {
-  const rows = resultRows(levers, fight.labels, fight.actions);
-  const v = verdict(rows, info);
-  $("verdict").textContent = v;
-  $("verdict").classList.toggle("tie", rows.some((r) => r.tie) && !rows.find((r) => r.pick)?.stay);
-  $("optionsTable").querySelector("tbody").innerHTML = rows.map((r) => `<tr class="${r.pick ? "best" : r.tie ? "tie" : ""}">
-    <td>${r.pick ? "★ " : ""}${r.label}${r.exactFirstTurn ? "" : ' <span class="pm" title="A move that hits 3-5 times, or too many damage rolls: this turn was played out by the playouts too.">*</span>'}</td>
-    <td>${r.score.toFixed(3)} <span class="pm">±${Number.isFinite(r.margin) ? r.margin.toFixed(3) : "?"}</span></td>
-    <td>${pct(r.pKO)}</td><td>${pct(r.pOppLeft)}</td><td>${pct(r.pLose, 1)}</td><td>${r.turns.toFixed(1)}</td></tr>`).join("");
-  const n = rows.reduce((a, r) => a + r.rollouts, 0);
-  const why = { separated: "one choice is clearly best", budget: "time limit reached", stopped: "stopped", exact: "solved exactly" }[info.stoppedBy];
-  $("progress").textContent = info.done ? `${n.toLocaleString()} playouts · ${why ?? ""}` : `${n.toLocaleString()} playouts · ${(info.ms / 1000).toFixed(1)} s…`;
-}
-// Send-in mode: each teammate's position solved in turn (ui-logic decideSendIn).
-const RESULT_ROW = (label, r, mark) => `<tr class="${mark ? "best" : ""}"><td>${mark ? "★ " : ""}${label}</td>
-    <td>${r.score.toFixed(3)} <span class="pm">±${Number.isFinite(r.margin) ? r.margin.toFixed(3) : "?"}</span></td>
-    <td>${pct(r.pKO)}</td><td>${pct(r.pOppLeft)}</td><td>${pct(r.pLose, 1)}</td><td>${r.turns.toFixed(1)}</td></tr>`;
-async function solveSendIn() {
-  const cands = buildSendIn(readForm());
-  solving = new AbortController();
-  $("solveBtn").disabled = true; $("stopBtn").disabled = false;
-  $("verdict").textContent = "Solving each send-in…"; $("verdict").classList.remove("tie");
-  $("optionsTable").querySelector("tbody").innerHTML = "";
-  const render = (rows, chosen = null) => {
-    $("optionsTable").querySelector("tbody").innerHTML = rows.map((x) => RESULT_ROW(`${x.label} <span class="pm">(then: ${x.row.label})</span>`, x.row, x.j === chosen)).join("");
-  };
-  try {
-    const t0 = Date.now();
-    const d = await decideSendIn(cands, async (fight, ms) => {
-      $("progress").textContent = `Solving ${fight.labels[0].replace(/^Stay in \((.*)\)$/, "$1")}… (${((Date.now() - t0) / 1000).toFixed(0)} s)`;
-      return solveInBrowser(fight, { budgetMs: ms, signal: solving.signal });
-    }, { budgetMs: Number($("budget").value), onProgress: (rows) => render(rows) });
-    render(d.rows, d.j);
-    $("verdict").textContent = `Send in ${cands.find((c) => c.j === d.j).species} -- ${d.why}`;
-    $("verdict").classList.toggle("tie", !!d.tie);
-    $("progress").textContent = `done in ${((Date.now() - t0) / 1000).toFixed(0)} s`;
-    $("notes").textContent = d.tie ? "First turn, each sent in: " + d.tie.stats.map((x) => `${cands.find((c) => c.j === x.j).species}: KO before it acts ${pct(x.pKO, 1)}, damage dealt ${pct(x.dmg)}, HP lost ${pct(x.lost)}, drops to low-HP mode ${pct(x.pLow)}${x.choice ? ", Choice item" : ""} (trade ${(100 * x.trade).toFixed(1)})`).join("; ") + "." : "";
-  } catch (e) {
-    $("verdict").textContent = "—";
-    $("solveError").textContent = `The solve stopped: ${e.message}`;
-  } finally {
-    solving = null;
-    $("solveBtn").disabled = false; $("stopBtn").disabled = true;
-  }
-}
-async function solve() {
-  refresh();
-  if ($("youFainted").checked) {
-    if (!teamCfgs) { $("solveError").textContent = "Paste your team and press “Use team”."; return; }
-    try { readForm(); } catch (e) { $("solveError").textContent = e.message; return; }
-    return solveSendIn();
-  }
-  if (!fight) { $("solveError").textContent = $("notes").textContent; return; }
-  solving = new AbortController();
-  $("solveBtn").disabled = true; $("stopBtn").disabled = false;
-  $("verdict").textContent = "Solving…"; $("verdict").classList.remove("tie");
-  $("progress").textContent = "Working out the first turn exactly…";
-  $("optionsTable").querySelector("tbody").innerHTML = "";
-  let pending = null;
-  try {
-    const r = await solveInBrowser(fight, {
-      budgetMs: Number($("budget").value), signal: solving.signal,
-      onProgress: (levers, info) => {
-        if (info.done) { renderResults(levers, info); return; }
-        if (!pending) pending = requestAnimationFrame(() => { pending = null; renderResults(levers, info); });
-      },
-    });
-    if (pending) cancelAnimationFrame(pending);
-    renderResults(r.levers, { done: true, stoppedBy: r.stoppedBy });
-  } catch (e) {
-    $("verdict").textContent = "—";
-    $("solveError").textContent = `The solve stopped: ${e.message}`;
-  } finally {
-    solving = null;
-    $("solveBtn").disabled = false; $("stopBtn").disabled = true;
   }
 }
 
@@ -343,6 +274,7 @@ function init() {
   sideRows($("youSide"), "you"); sideRows($("oppSide"), "opp");
   refreshSaved(); refreshSetList();
   setupCombo("oppSet", "oppSetList"); setupCombo("leadSet", "leadSetList");
+  setupCombo("other1Set", "other1SetList", { allowEmpty: true }); setupCombo("other2Set", "other2SetList", { allowEmpty: true });
 
   $("parseTeam").addEventListener("click", () => useTeam($("teamText").value));
   $("saveTeam").addEventListener("click", () => {
@@ -371,14 +303,14 @@ function init() {
   for (const ev of ["input", "change"]) document.addEventListener(ev, (e) => {
     if (!e.target.classList?.contains("trigger") && e.target.name !== "outMon") return;
     if (e.target.id === "o-status") syncStatusRows("o");
+    if (e.target.id === "youFirstTurn" || e.target.id === "youLastMove") syncHistoryRows();
+    if (e.target.id === "oppIsLead") syncLeadRow();
     if (e.target.id === "oppSet" && e.type === "change") $("oppGender").value = ""; // a new mon
     if (["challenge", "battle"].includes(e.target.id) && e.type === "change") $("brain").value = brainFor(runInputs()) ?? "";
-    if (["challenge", "battle", "brain"].includes(e.target.id) || e.target.name === "oppIndex") brainChanged();
+    if (["challenge", "battle", "brain"].includes(e.target.id)) brainChanged();
     else if (e.target.id === "bracketOnly" || e.target.name === "level") refreshSetList();
     if (["oppSet", "challenge", "battle"].includes(e.target.id) || e.target.name === "level") renderOppSet();
     clearTimeout(refresh.t); refresh.t = setTimeout(refresh, 120);
   });
-  $("solveBtn").addEventListener("click", solve);
-  $("stopBtn").addEventListener("click", () => solving?.abort());
 }
 init();

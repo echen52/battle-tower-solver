@@ -1,23 +1,23 @@
-/* Battle Palace Solver — laid out like the Battle Arena solver (your side,
-   the battle, the opponent). Burnt-orange theme on warm, low-glare darks,
-   as the Arena page has its wood-gold. Roles kept apart:
+/* Battle Tower Solver -- the Palace / Arena layout (your side, the battle,
+   the opponent) in a steel-blue theme on cool, low-glare darks. Roles:
      --brand   = filled chrome: primary button, selected toggle
-     --accent  = the same orange lightened for text: titles, borders, focus
-     --best    = ONLY the recommendation (sage green, so it never reads as chrome)
-     --tie     = "too close to call" (soft blue)
-   WCAG contrast (computed): accent on bg 6.9:1, on surface 5.7:1; muted on
-   panel 6.2:1; white on brand 5.9:1; best on bg 8.7:1; tie on bg 9.0:1. */
+     --accent  = the same blue lightened for text: titles, borders, focus
+     --switch  = ONLY the opponent's switch rows in the readout (amber)
+   WCAG contrast (computed): accent on bg 7.3:1, on surface 5.9:1; muted on
+   panel 6.8:1; text on panel 14.1:1; white on brand 7.0:1; switch on panel
+   8.6:1. */
 
 :root {
-  --bg: #171412;        /* warm near-black */
-  --panel: #201b18;
-  --surface: #2c2521;   /* inputs, buttons */
-  --border: #4a3a30;
-  --divider: #352b25;
-  --text: #efe8e2;
-  --muted: #a8998d;
-  --brand: #a44a1a;     /* burnt orange, the main colour */
-  --accent: #e08a4f;
+  --bg: #121518;
+  --panel: #191d22;
+  --surface: #222830;   /* inputs, buttons */
+  --border: #344050;
+  --divider: #283039;
+  --text: #e6ebf0;
+  --muted: #9aa6b2;
+  --brand: #2b5c8a;     /* steel blue, the main colour */
+  --accent: #6fa8dc;
+  --switch: #d9b36a;
   --best: #8cc084;
   --tie: #9ab8e0;
   --error: #ff6b6b;
@@ -49,7 +49,7 @@ select, input[type="text"], input[type="number"], textarea {
   background: var(--surface); border: 1px solid var(--border); border-radius: 3px; color: var(--text); font-family: monospace; font-size: 14px; padding: 5px 7px; outline: none;
 }
 select:focus, input:focus, textarea:focus { border-color: var(--accent); }
-input::placeholder, textarea::placeholder { color: #8a7d73; }
+input::placeholder, textarea::placeholder { color: #8a96a3; }
 input[type="number"] { width: 68px; }
 input[type="checkbox"] { accent-color: var(--accent); }
 textarea { width: 100%; resize: vertical; min-height: 130px; }
@@ -68,7 +68,7 @@ textarea { width: 100%; resize: vertical; min-height: 130px; }
 .btn:hover:not(:disabled) { background: var(--panel); border-color: var(--accent); color: var(--accent); }
 .btn:disabled { opacity: 0.45; cursor: default; }
 .btn-primary { background: var(--brand); border-color: var(--brand); color: #fff; }
-.btn-primary:hover:not(:disabled) { background: #9a4418; border-color: var(--accent); color: #fff; }
+.btn-primary:hover:not(:disabled) { background: #24507a; border-color: var(--accent); color: #fff; }
 .btn-small { padding: 3px 8px; }
 .btn-row { display: flex; gap: 8px; margin: 8px 0 10px; flex-wrap: wrap; align-items: center; }
 .btn-row input[type="text"] { flex: 1; min-width: 100px; }
@@ -120,7 +120,15 @@ textarea { width: 100%; resize: vertical; min-height: 130px; }
 
 .choice-bars .cb-row { display: grid; grid-template-columns: 1fr 48px; gap: 6px; font-size: 13px; margin-bottom: 3px; align-items: center; }
 .choice-bars .cb-name { position: relative; padding: 2px 5px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.choice-bars .cb-fill { position: absolute; inset: 0 auto 0 0; background: rgba(224, 138, 79, 0.22); z-index: 0; }
+.choice-bars .cb-fill { position: absolute; inset: 0 auto 0 0; background: rgba(111, 168, 220, 0.22); z-index: 0; }
 .choice-bars .cb-name span { position: relative; z-index: 1; }
 .choice-bars .cb-p { text-align: right; color: var(--muted); }
 #savedTeams { flex: 1; min-width: 0; }
+
+/* the readout: switch rows in amber */
+.choice-bars .cb-switch .cb-fill { background: rgba(217, 179, 106, 0.22); }
+.choice-bars .cb-switch .cb-name span, .choice-bars .cb-switch .cb-p { color: var(--switch); }
+#battlePanel .choice-bars .cb-row { font-size: 15px; grid-template-columns: 1fr 60px; }
+.seen-moves { display: flex; flex-wrap: wrap; gap: 4px 12px; flex: 1; }
+.seen-move { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; }
+input[type="number"].hp-small { width: 58px; }
