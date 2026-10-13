@@ -103,6 +103,26 @@ function sameBag(a, b) {
       "Pursuit on your switch hits the leaver, not the newcomer");
   }
 
+  // Pursuit's damage counts as taken though the mon hit has left the field.
+  {
+    const s = { ...s0, oppEncoredMove: "Pursuit", oppEncoreTurns: 3 };
+    const out = A.playOption(tctx, s, { kind: "switch", j: 2 }, { pStay: 1, switches: [] });
+    const want = out.reduce((a, o) => a + o.p * (100 - Math.max(0, o.state.youBench[0].hpPct)) + o.p * (100 - Math.max(0, o.state.yourHpPct)), 0);
+    const x = A.summarize(s, out);
+    ok(x.taken > 0 && near(x.taken, want, 1e-9), `taken counts the leaver's Pursuit damage (${x.taken.toFixed(1)}% expected)`);
+  }
+  // a mixed turn: P(stay) x its move + P(switch) x the switch, outcome by outcome
+  {
+    const s = { ...s0, oppEncoredMove: "Crunch", oppEncoreTurns: 3 };
+    const sw = { p: 0.3, key: "Spenser Silver Slaking", mon: B.oppTeam[1], hpPct: 100, status: null };
+    const mix = A.playOption(tctx, s, { kind: "move", move: "Surf" }, { pStay: 0.7, switches: [sw] });
+    const st = A.playOption(tctx, s, { kind: "move", move: "Surf" }, { pStay: 1, switches: [] });
+    const so = A.playOption(tctx, s, { kind: "move", move: "Surf" }, { pStay: 0, switches: [{ ...sw, p: 1 }] });
+    const want = new Map();
+    for (const [w, outs] of [[0.7, st], [0.3, so]]) for (const [k, p] of bag(outs)) want.set(k, (want.get(k) ?? 0) + w * p);
+    ok(near(sum(mix), 1, 1e-12) && sameBag(bag(mix), want), `a mixed turn = 0.7 x its move + 0.3 x its switch (${mix.length} outcomes)`);
+  }
+
   // its switch = battle.js oppSwitchTurn: Perish count 0 makes ShouldSwitch
   // switch with certainty (to GetMostSuitable's pick); your move forced by Encore.
   const sp = { ...s0, youEncoredMove: "Earthquake", youEncoreTurns: 3, oppPerishCount: 0 };

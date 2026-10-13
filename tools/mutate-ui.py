@@ -2,7 +2,7 @@
 # engine/tower.js, engine/next-in.js) against tests/test-ui-logic.mjs.
 #   python tools/mutate-ui.py      (commit first: each file is restored from memory)
 import subprocess
-MUT = [
+MUT_UI = [
   ("site/ui-logic.js", "uniform candidate weights", "w: mix.mass / abilities.length,", "w: 1 / abilities.length,"),
   ("site/ui-logic.js", "trainer ignored in the party draw", "challenge: run.challenge, battle: run.battle, trainerId, brain, ivs,", "challenge: run.challenge, battle: run.battle, brain, ivs,"),
   ("site/ui-logic.js", "IVs not from the trainer", "trainerId != null ? fixedIvs(trainerId) : form.opp.ivTier", "form.opp.ivTier"),
@@ -11,7 +11,7 @@ MUT = [
   ("engine/next-in.js", "mass without the trainer prior", "return Object.assign([...merged.values()], { mass: total });", "return Object.assign([...merged.values()], { mass: 1 });"),
 ]
 caught = 0
-for f, name, a, b in MUT:
+for f, name, a, b in MUT_UI:
     orig = open(f, encoding="utf8", newline="").read()
     src = orig.replace("\r\n", "\n")
     assert a in src, name
@@ -24,4 +24,4 @@ for f, name, a, b in MUT:
     caught += hit
     fails = [l for l in r.stdout.splitlines() if l.startswith("FAIL")][:2]
     print(("CAUGHT " if hit else "MISSED ") + name, "|", " / ".join(fails)[:180], flush=True)
-print(f"mutations caught {caught}/{len(MUT)}")
+print(f"mutations caught {caught}/{len(MUT_UI)}")
