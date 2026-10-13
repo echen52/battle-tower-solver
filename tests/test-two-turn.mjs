@@ -165,6 +165,22 @@ function brute(w, option) {
     `Milotic at 1%: turn 1 counted once, turn 2 only where it was missed (KO ${U.pct(one.pKO, 1)} -> ${U.pct(two.pKO, 1)}, played ${U.pct(two.pPlayed, 1)})`);
 }
 
+// a position where it switches (Snorlax after a landed Earthquake): turn 2 is
+// not played after its switch, and a KO there counts as first (it never attacked)
+{
+  const f = formOf("Snorlax 3", 7, { firstTurn: false });
+  const w = world({ ...f, you: { ...f.you, firstTurn: false, lastMove: "Earthquake", landed: true, seen: ["Earthquake"] }, run: { ...f.run, turn: 2 } });
+  const opp0 = w.opp(w.s);
+  const option = A.yourOptions(w.tctx, w.s).find((o) => o.label === "Switch to Latios");
+  const outs = A.playOption({ ...w.tctx, ...EXACT }, w.s, A.yourOptions(w.tctx, w.s).find((o) => o.label === "Earthquake"), opp0);
+  const sw = outs.filter((o) => o.theirs.length === 2);
+  ok(opp0.switches.length > 0 && sw.length > 0 && sw.every((o) => o.first === true), `its switch: ${sw.length} outcomes, all "it never attacked" (P(switch) ${U.pct(1 - opp0.pStay, 1)})`);
+  const b = brute(w, option);
+  const tiny = A.playTwo(w.tctx, w.s, option, opp0, (st) => w.opp(st, { plans: w.plans }), { width: 1e-9 });
+  ok(["pKO", "pKOFirst", "pFaint", "dealt", "taken", "pPlayed"].every((k) => near(tiny[k], b[k], 1e-9)) && b.pPlayed < 1 - 1e-6,
+    `with switches: tiny bands = brute force exactly, turn 2 only where it stayed (played ${U.pct(b.pPlayed, 1)})`);
+}
+
 // ── 5. slices add up ───────────────────────────────────────────────────────
 {
   const pos = U.buildPosition(formOf("Milotic 4", 8));

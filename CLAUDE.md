@@ -28,10 +28,19 @@ invent or randomise behaviour.
    the page's "Your options this turn" table (module worker,
    site/advise-worker.js). Per option: KO it / you faint / HP dealt / HP taken
    this turn, exact rolls (cap 4000 outcomes -> point estimate, flagged "~"),
-   averaged over the readout's odds, the candidates and unknown sleep. No
-   ranking or recommendation yet -- ask the user what to rank by. NEXT: two
-   turns. -- expectimax over YOUR actions against the AI as a
-   known random policy (not minimax), using that belief.
+   averaged over the readout's odds, the candidates and unknown sleep.
+   RANKING (user, 2026-10-13): "chance to KO first (if outspeed) then least
+   damage taken" -> advise.js better: pKOFirst (it faints before it attacks:
+   logic.js neverActed, or its action was the switch), KO chances within
+   KO_TIE = 1 point equal, then least HP taken; the page stars the top row.
+   TWO TURNS DONE (2026-10-13, page toggle): advise.js playTwo -- each option,
+   then in every position where both mons are still out and it did not
+   switch / leave, your best reply by the same rule against the readout
+   RERUN there. Turn-1 outcomes grouped: same state but HP, HP in 4% bands
+   that never straddle an AI HP cutoff (AI_HP_EDGES, read off ai-program.js;
+   uniform bands were 11 points off on Aerial Ace into Milotic: it Recovers
+   below 70%), played from the band's most likely real outcome. Stated: the
+   reply is picked knowing the world (candidate set, sleep counter).
 4. **Full-battle solve** -- depth-limited search + playouts (palace-solver's
    solve-core / montecarlo machinery), maybe a streak sim.
 
@@ -86,6 +95,14 @@ oppUsablePartyMons kept -- the two-slot recount would miss the third), both
 switch. Limits: YOUR Roar / Whirlwind and ITS Baton Pass end the count as "it leaves" (no team hook: who comes in is not
 played); YOUR Baton Pass throws (not ported) -> "not analysable".
 
+Speed (two turns): the readout's switch half is built once per position
+SHAPE (tower.js switchPlan; `plans` reuses it across HP -- ShouldSwitch reads
+HP only in Natural Cure's half test, which is in the key) and its move half
+once per (slot, healthy count) -- the move AI reads the bench only as that
+count (logic.js:4413/:4684). aiTypeCalc memoised. The page splits each
+option into POOL slices (playTwo part [k, n], ui-logic mergeParts) over a
+worker pool. Typical position: 4-30 s of CPU in all, divided by the pool.
+
 ## Tests -- `bash tools/run-suite.sh`
 
 New / replaced:
@@ -93,6 +110,7 @@ New / replaced:
 |---|---|
 | test-tower | 30: corpus (903 positions, 300 Frontier-vs-Frontier walks played with towerChoices both sides): sums, only selectable moves, unforced = the interpreter with no mask, player side = mirrored opponent; forced paths in source order (lock, Struggle-before-Encore, Encore), Disable / Choice lock / 0 PP; oppActions = ShouldSwitch x move; partyMix vs teammateDist, seen filter, IV filter, Anabel, errors; history (Protect seen -> SolarBeam down, AI_CV_ChargeUpMove), an unseen teammate's ability (Arcanine 3 Flash Fire, worked form by form), bench count (Baton Pass -10 with no usable teammate); readout vs 6,000 parties from the LITERAL FillTrainerParty loop (rejection-sampled, abilities drawn) within 4 sd |
 | test-ui-logic | 43: every page input onto its engine field; party inputs -> partyMix / known; readout = oppReadout over the sleep mix; trainer list / labels / pool / IVs; candidate odds = pool shares (trainer known), = the bracket draw worked by hand, moved by a seen teammate (worked trainer by trainer); readout over candidates = their weighted readouts. tools/mutate-ui.py 6/6 |
+| test-two-turn | 18: neverActed = the engine's "opp never acts — KO" text; KO first = KO when you outspeed, 0 when outsped; the ranking on hand rows; readout with reuse = party by party on 40+ positions (turn-1 outcomes, a Natural Cure sleeper either side of half); playTwo with tiny bands = a brute force written in the test exactly, 4% bands within 1 point (Aerial Ace into Milotic: 10.05 vs 10.34 KO first); slices add up. tools/mutate-two.py |
 | test-advise | 19: move vs move = palaceTurn, your switch = team.js switchTurn (Crunch and Pursuit), its switch = battle.js oppSwitchTurn (Perish 0 forces it), both switch -- all with both choices forced by Encore so the Palace layer's choices equal the Tower's; a mixed stay/switch turn; Pursuit damage counted on the leaver; exact rolls vs 4,000 turns with drawn rolls (Meteor Mash into Snorlax 70%: exact 70.4% KO; point estimate differs); summarize by hand; options (Encore, recharge, fainted mate, Shadow Tag); advise over three candidates = weighted. tools/mutate-advise.py 8/8 |
 | test-site-browser | 30 (+9 trainer / candidates, +2 advice table = Node): the page in headless Chromium (Playwright from battle_arena_sim/node_modules): bars = Node readout at turn 1, after a landed Earthquake (switch rows), with an "also seen" mon, after clearing it, at Anabel's battle; saved team over a reload; no page error |
 
