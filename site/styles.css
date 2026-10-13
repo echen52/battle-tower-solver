@@ -115,10 +115,6 @@ textarea { width: 100%; resize: vertical; min-height: 130px; }
 .options-table tr.best td:first-child { color: var(--best); }
 .options-table tr.tie td:first-child { color: var(--tie); }
 .options-table .pm { color: var(--muted); font-size: 12px; }
-.options-table .two-only { display: none; }
-.options-table.two-turns .two-only { display: block; font-size: 11px; color: var(--accent); white-space: nowrap; }
-.options-table .then-line { display: block; font-size: 12px; color: var(--muted); white-space: normal; }
-.turns-seg { display: inline-flex; margin: 0 0 8px; }
 .notes { color: var(--muted); font-size: 12px; margin-top: 6px; line-height: 1.5; }
 .error-display { color: var(--error); font-size: 13px; margin-top: 6px; white-space: pre-wrap; }
 

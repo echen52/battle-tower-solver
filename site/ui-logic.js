@@ -319,7 +319,8 @@ export const pct = (x, digits = 0) => `${(100 * x).toFixed(digits)}%`;
 // ── the advisor ────────────────────────────────────────────────────────────
 // Each of your options, played out against the opponent's action odds
 // (engine/advise.js), averaged over the candidates and the start mix.
-//   turns 1: this turn.  turns 2: this turn, then your best reply next turn
+//   turns 1: this turn (the page).  turns 2 -- NOT ON THE PAGE (user,
+//   2026-10-13), kept for tests/test-two-turn.mjs: this turn, then your best reply next turn
 //   in each position it leads to (advise.js playTwo; the readout rerun there).
 //   only: a list of option labels to work out; part: [k, n], the k-th of n
 //   slices of the two-turn work (advise.js playTwo) -- the page splits the

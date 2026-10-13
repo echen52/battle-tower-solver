@@ -44,18 +44,12 @@ const expectBars = (r) => r.rows.slice(0, 10).map((x) => [x.label, U.pct(x.p, x.
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 // the advice table, once the worker has answered; and the same rows from Node
 const adviceOf = async (page) => {
-  await page.waitForFunction(() => !/Working|Looking/.test(document.getElementById("adviceNote").textContent) && document.querySelectorAll("#adviceTable tbody tr").length > 0, null, { timeout: 180000 });
+  await page.waitForFunction(() => !/Working/.test(document.getElementById("adviceNote").textContent) && document.querySelectorAll("#adviceTable tbody tr").length > 0, null, { timeout: 180000 });
   return page.$$eval("#adviceTable tbody tr", (trs) => trs.map((tr) => [...tr.children].map((td) => td.textContent.trim())));
 };
 const fmt = (x) => U.pct(x, x > 0 && x < 0.01 ? 1 : 0);
-// ranked (★ on the best), KO first / KO it / you faint / dealt / taken, and
-// with two turns the follow-up most often picked ("then ..." under the option)
-const thenOf = (r) => {
-  if (!r.follow?.length) return "—";
-  const shown = r.follow.filter(([, q], i) => i === 0 || q >= 0.01), small = r.follow.length - shown.length;
-  return shown.map(([l, q]) => `${l} ${U.pct(q)}`).join(", ") + (small ? `, +${small} under 1%` : "");
-};
-const expectAdvice = (form, turns = 1) => U.rankAdvice(U.advise(U.buildPosition(form), { turns })).map((r) => [(r.best ? "★ " : "") + r.label + (r.approx ? " ~" : "") + (turns === 2 ? `then ${thenOf(r)}` : ""),
+// ranked (★ on the best), KO first / KO it / you faint / dealt / taken
+const expectAdvice = (form) => U.rankAdvice(U.advise(U.buildPosition(form))).map((r) => [(r.best ? "★ " : "") + r.label + (r.approx ? " ~" : ""),
   fmt(r.pKOFirst), fmt(r.pKO), fmt(r.pFaint), `${r.dealt.toFixed(0)}%`, `${r.taken.toFixed(0)}%`]);
 
 const browser = await chromium.launch();
@@ -92,21 +86,8 @@ try {
   const adv1 = await adviceOf(page), want1 = expectAdvice(form1);
   ok(adv1.length === 6 && same(adv1, want1), `advice table = Node's advise (${adv1.map((r) => `${r[0]} ${r[1]}`).join(", ")})`);
   ok(adv1[0][0].startsWith("★ ") && adv1.filter((r) => r[0].startsWith("★")).length === 1, "one ★, on the top row");
-  // Two turns: the worker pool's merged table = Node's advise(turns 2), ranked.
-  await page.click("label[for=turns2]"); await page.waitForTimeout(400);
-  const adv2 = await adviceOf(page), want2 = expectAdvice(form1, 2);
-  ok(same(adv2, want2), `two turns: table = Node's (${adv2.map((r) => `${r[0]} ${r[1]}`).join(", ")})`);
-  const heads = () => page.$$eval("#adviceTable th", (ths) => ths.filter((t) => t.offsetParent).map((t) => t.innerText.trim().replace(/\s+/g, " ")).join(" | "));
-  ok(await page.locator("#adviceTable .then-line").first().isVisible() && (await page.textContent("#adviceHead")).includes("two turns")
-    && (await heads()) === "Option | KO first 2 turns | KO it 2 turns | You faint 2 turns | Dealt 2 turns | Taken 2 turns", `two turns: headings say so (${await heads()})`);
-  // back to this turn: drawn at once from what was kept (no "Working")
-  await page.click("label[for=turns1]");
-  const adv1b = await page.$$eval("#adviceTable tbody tr", (trs) => trs.map((tr) => [...tr.children].map((td) => td.textContent.trim())));
-  ok(same(adv1b, want1) && await page.locator("#adviceTable .then-line").count() === 0 && (await heads()) === "Option | KO first | KO it | You faint | Dealt | Taken", "This turn: back at once, one-turn headings");
-  await page.click("label[for=turns2]");
-  const adv2b = await page.$$eval("#adviceTable tbody tr", (trs) => trs.map((tr) => [...tr.children].map((td) => td.textContent.trim())));
-  ok(same(adv2b, want2), "Two turns again: back at once, nothing worked out again");
-  await page.click("label[for=turns1]");
+  ok(await page.locator("#turns2").count() === 0 && await page.locator("#adviceTable .then-line").count() === 0
+    && (await page.$$eval("#adviceTable th", (ths) => ths.map((t) => t.textContent.trim()).join(" | "))) === "Option | KO first | KO it | You faint | Dealt | Taken", "no two-turn mode on the page; one-turn headings");
 
   // Turn 2 after your Earthquake hit: switch rows appear, amber, and match.
   await page.fill("#turn", "2");

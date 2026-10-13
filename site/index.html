@@ -103,18 +103,14 @@
     <div id="notes" class="notes"></div>
 
     <h3 id="adviceHead">Your options this turn</h3>
-    <span class="seg turns-seg" role="group" aria-label="Look ahead" title="Two turns: each option this turn, then your best reply next turn in every position it leads to (slower: a few seconds)">
-      <input type="radio" name="turns" value="1" id="turns1" checked /><label for="turns1" class="btn">This turn</label>
-      <input type="radio" name="turns" value="2" id="turns2" /><label for="turns2" class="btn">Two turns</label>
-    </span>
     <table class="options-table" id="adviceTable">
       <thead><tr>
         <th title="Each thing you can do, played out against everything it might do (the odds above), every damage roll, crit and miss counted. ★ = the best by: KO it before it moves, then least HP taken (KO chances within 1 point count as equal).">Option</th>
-        <th title="Chance it faints before it gets to attack you (you outspeed and KO, or it switched and the newcomer falls) -- with two turns, on whichever turn it faints">KO first<span class="two-only">2 turns</span></th>
-        <th title="Chance one of their Pokémon that was out faints">KO it<span class="two-only">2 turns</span></th>
-        <th title="Chance one of your Pokémon faints">You faint<span class="two-only">2 turns</span></th>
-        <th title="Expected HP it loses, in % of its max HP (summed over their Pokémon that were out; over two turns it can pass 100% when it heals in between)">Dealt<span class="two-only">2 turns</span></th>
-        <th title="Expected HP you lose, in % of the max HP of each of your Pokémon hit (a switch-in included)">Taken<span class="two-only">2 turns</span></th>
+        <th title="Chance it faints before it gets to attack you (you outspeed and KO, or it switched and the newcomer falls)">KO first</th>
+        <th title="Chance one of their Pokémon that was out faints">KO it</th>
+        <th title="Chance one of your Pokémon faints">You faint</th>
+        <th title="Expected HP it loses, in % of its max HP (summed over their Pokémon that were out)">Dealt</th>
+        <th title="Expected HP you lose, in % of the max HP of each of your Pokémon hit (a switch-in included)">Taken</th>
       </tr></thead>
       <tbody></tbody>
     </table>
