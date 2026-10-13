@@ -12,7 +12,7 @@ import { FRONTIER_TRAINERS } from "../engine/frontier-trainers.js";
 import { trainerPrior, fixedIvs } from "../engine/next-in.js";
 import { partyMix, oppReadout } from "../engine/tower.js";
 import { TRAINER_CLASS_NAMES } from "../engine/trainer-classes.js";
-import { yourOptions, adviseOption } from "../engine/advise.js";
+import { yourOptions, adviseOption, playTwo, better } from "../engine/advise.js";
 
 export const STAGE_KEYS = ["atk", "def", "spa", "spd", "spe", "accuracy", "evasion"];
 const HIGH_TIER = 849;
@@ -316,28 +316,45 @@ export function readout(pos) {
 
 export const pct = (x, digits = 0) => `${(100 * x).toFixed(digits)}%`;
 
-// ── the advisor (one turn) ─────────────────────────────────────────────────
-// Each of your options this turn, played out against the opponent's action
-// odds (engine/advise.js), averaged over the candidates and the start mix.
-// Returns [{ label, kind, pKO, pFaint, dealt, taken, pLeaves, approx, cover }]
-// in the order your options come (moves, then switches); cover < 1 when the
-// option is not available against every candidate (e.g. a trapping ability).
-export function advise(pos) {
+// ── the advisor ────────────────────────────────────────────────────────────
+// Each of your options, played out against the opponent's action odds
+// (engine/advise.js), averaged over the candidates and the start mix.
+//   turns 1: this turn.  turns 2: this turn, then your best reply next turn
+//   in each position it leads to (advise.js playTwo; the readout rerun there).
+//   only: a list of option labels to work out; part: [k, n], the k-th of n
+//   slices of the two-turn work (advise.js playTwo) -- the page splits the
+//   work over several workers by option and slice; mergeParts adds them up.
+// Returns [{ label, kind, pKO, pKOFirst, pFaint, dealt, taken, pLeaves,
+// approx, cover, (turns 2:) pPlayed, follow: [[label, p]] }] in the order your
+// options come (moves, then switches); cover < 1 when the option is not
+// available against every candidate (e.g. a trapping ability).
+const SUMS = ["pKO", "pKOFirst", "pFaint", "dealt", "taken", "pLeaves", "pPlayed"];
+export function advise(pos, { turns = 1, only = null, part = null } = {}) {
   const acc = new Map();
   for (const c of pos.cands) {
     const reserves = 2 - Object.entries(c.known).filter(([k, v]) => k !== c.key && v.hpPct === 0).length;
+    const plans = new Map(); // the readout's switch half, shared by positions that differ only in HP
+    const readoutAt = (st) => {
+      const r = oppReadout({ team: pos.team, s: st, mix: c.mix, known: c.known, active: c.key, level: pos.level, plans });
+      return { pStay: 1 - r.pSwitch, switches: r.switchForms };
+    };
     for (const { p, state } of c.start) {
       const w = c.w * p;
-      const r = oppReadout({ team: pos.team, s: state, mix: c.mix, known: c.known, active: c.key, level: pos.level });
-      const opp = { pStay: 1 - r.pSwitch, switches: r.switchForms };
       const tctx = { team: pos.team, opp: c.opp, oppReserves: reserves, activeKey: c.key };
-      for (const o of yourOptions(tctx, state)) {
+      const opts = yourOptions(tctx, state).filter((o) => !only || only.includes(o.label));
+      if (!opts.length) continue;
+      const opp = readoutAt(state);
+      for (const o of opts) {
         let x;
-        try { x = adviseOption(tctx, state, o, opp); } catch (e) { x = { error: e.message }; }
-        const e = acc.get(o.label) ?? { label: o.label, kind: o.kind, cover: 0, pKO: 0, pFaint: 0, dealt: 0, taken: 0, pLeaves: 0, approx: false, error: null };
+        try { x = turns === 2 ? playTwo(tctx, state, o, opp, readoutAt, { part }) : adviseOption(tctx, state, o, opp); } catch (e) { x = { error: e.message }; }
+        const e = acc.get(o.label) ?? { label: o.label, kind: o.kind, cover: 0, ...Object.fromEntries(SUMS.map((k) => [k, 0])), approx: false, error: null, follow: new Map() };
         e.cover += w;
         if (x.error) e.error = x.error;
-        else { for (const k of ["pKO", "pFaint", "dealt", "taken", "pLeaves"]) e[k] += w * x[k]; e.approx ||= x.approx; }
+        else {
+          for (const k of SUMS) e[k] += w * (x[k] ?? 0);
+          e.approx ||= x.approx;
+          for (const [l, q] of x.follow ?? []) e.follow.set(l, (e.follow.get(l) ?? 0) + w * q);
+        }
         acc.set(o.label, e);
       }
     }
@@ -345,6 +362,39 @@ export function advise(pos) {
   return [...acc.values()].map((e) => {
     if (e.error) return { label: e.label, kind: e.kind, error: e.error, cover: e.cover };
     const n = (v) => v / e.cover;
-    return { ...e, pKO: n(e.pKO), pFaint: n(e.pFaint), dealt: n(e.dealt), taken: n(e.taken), pLeaves: n(e.pLeaves) };
+    const out = { ...e, ...Object.fromEntries(SUMS.map((k) => [k, n(e[k])])), follow: [...e.follow].map(([l, q]) => [l, n(q)]).sort((a, b) => b[1] - a[1]) };
+    if (turns === 1) { delete out.pPlayed; delete out.follow; }
+    return out;
   });
+}
+
+// The n slices of one option's two-turn rows (advise(..., { part })) added up:
+// the sums add, cover is the same in each, approx if any is.
+export function mergeParts(parts) {
+  const by = new Map();
+  for (const rows of parts) for (const r of rows) {
+    const e = by.get(r.label);
+    if (!e) { by.set(r.label, { ...r, follow: new Map(r.follow ?? []) }); continue; }
+    if (r.error || e.error) { by.set(r.label, r.error ? r : e); continue; }
+    for (const k of SUMS) e[k] += r[k] ?? 0;
+    e.approx ||= r.approx;
+    for (const [l, q] of r.follow ?? []) e.follow.set(l, (e.follow.get(l) ?? 0) + q);
+  }
+  return [...by.values()].map((e) => (e.error ? e : { ...e, follow: [...e.follow].sort((a, b) => b[1] - a[1]) }));
+}
+
+// The user's ranking (2026-10-13): KO it before it moves first, then least HP
+// taken (advise.js better: KO chances within KO_TIE count as equal). Returns
+// the rows in rank order, `best: true` on the first; rows that could not be
+// worked out go last.
+export function rankAdvice(rows) {
+  const ok = rows.filter((r) => !r.error), bad = rows.filter((r) => r.error);
+  // a stable insertion sort: `better` is not a total order (the tie band)
+  const sorted = [];
+  for (const r of ok) {
+    let i = sorted.length;
+    while (i > 0 && better(r, sorted[i - 1])) i--;
+    sorted.splice(i, 0, r);
+  }
+  return [...sorted.map((r, i) => ({ ...r, best: i === 0 })), ...bad];
 }

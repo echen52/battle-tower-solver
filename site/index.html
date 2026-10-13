@@ -102,14 +102,17 @@
     <div id="switchLine" class="progress"></div>
     <div id="notes" class="notes"></div>
 
-    <h3>Your options this turn</h3>
+    <h3 id="adviceHead">Your options this turn</h3>
+    <label class="check-row"><input type="checkbox" id="twoTurns" class="trigger"> Two turns: add your best reply next turn (slower)</label>
     <table class="options-table" id="adviceTable">
       <thead><tr>
-        <th title="Each thing you can do this turn, played out against everything it might do (the odds above), every damage roll, crit and miss counted.">Option</th>
-        <th title="Chance one of their Pokémon that was out faints this turn">KO it</th>
-        <th title="Chance one of your Pokémon faints this turn">You faint</th>
-        <th title="Expected HP it loses this turn, in % of its max HP (summed over their Pokémon that were out)">Dealt</th>
-        <th title="Expected HP you lose this turn, in % of the max HP of each of your Pokémon hit (a switch-in included)">Taken</th>
+        <th title="Each thing you can do, played out against everything it might do (the odds above), every damage roll, crit and miss counted. ★ = the best by: KO it before it moves, then least HP taken (KO chances within 1 point count as equal).">Option</th>
+        <th title="Chance it faints before it gets to attack you (you outspeed and KO, or it switched and the newcomer falls)">KO first</th>
+        <th title="Chance one of their Pokémon that was out faints">KO it</th>
+        <th title="Chance one of your Pokémon faints">You faint</th>
+        <th title="Expected HP it loses, in % of its max HP (summed over their Pokémon that were out)">Dealt</th>
+        <th title="Expected HP you lose, in % of the max HP of each of your Pokémon hit (a switch-in included)">Taken</th>
+        <th class="then" title="Two turns: your best reply next turn, the one picked most often (hover +n for the rest)">Then</th>
       </tr></thead>
       <tbody></tbody>
     </table>

@@ -44,11 +44,15 @@ const expectBars = (r) => r.rows.slice(0, 10).map((x) => [x.label, U.pct(x.p, x.
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 // the advice table, once the worker has answered; and the same rows from Node
 const adviceOf = async (page) => {
-  await page.waitForFunction(() => !/Working/.test(document.getElementById("adviceNote").textContent) && document.querySelectorAll("#adviceTable tbody tr").length > 0, null, { timeout: 60000 });
+  await page.waitForFunction(() => !/Working|Looking/.test(document.getElementById("adviceNote").textContent) && document.querySelectorAll("#adviceTable tbody tr").length > 0, null, { timeout: 180000 });
   return page.$$eval("#adviceTable tbody tr", (trs) => trs.map((tr) => [...tr.children].map((td) => td.textContent.trim())));
 };
 const fmt = (x) => U.pct(x, x > 0 && x < 0.01 ? 1 : 0);
-const expectAdvice = (form) => U.advise(U.buildPosition(form)).map((r) => [r.label + (r.approx ? " ~" : ""), fmt(r.pKO), fmt(r.pFaint), `${r.dealt.toFixed(0)}%`, `${r.taken.toFixed(0)}%`]);
+// ranked (★ on the best), KO first / KO it / you faint / dealt / taken, and
+// with two turns the follow-up most often picked ("Then")
+const thenOf = (r) => !r.follow?.length ? "—" : `${r.follow[0][0]} ${U.pct(r.follow[0][1])}${r.follow.length > 1 ? ` +${r.follow.length - 1}` : ""}`;
+const expectAdvice = (form, turns = 1) => U.rankAdvice(U.advise(U.buildPosition(form), { turns })).map((r) => [(r.best ? "★ " : "") + r.label + (r.approx ? " ~" : ""),
+  fmt(r.pKOFirst), fmt(r.pKO), fmt(r.pFaint), `${r.dealt.toFixed(0)}%`, `${r.taken.toFixed(0)}%`, turns === 2 ? thenOf(r) : ""]);
 
 const browser = await chromium.launch();
 try {
@@ -83,6 +87,15 @@ try {
   ok((await page.textContent("#switchLine")).includes("does not switch"), "turn 1: no switch line");
   const adv1 = await adviceOf(page), want1 = expectAdvice(form1);
   ok(adv1.length === 6 && same(adv1, want1), `advice table = Node's advise (${adv1.map((r) => `${r[0]} ${r[1]}`).join(", ")})`);
+  ok(adv1[0][0].startsWith("★ ") && adv1.filter((r) => r[0].startsWith("★")).length === 1, "one ★, on the top row");
+  // Two turns: the worker pool's merged table = Node's advise(turns 2), ranked.
+  await page.check("#twoTurns"); await page.waitForTimeout(400);
+  const adv2 = await adviceOf(page), want2 = expectAdvice(form1, 2);
+  ok(same(adv2, want2), `two turns: table = Node's (${adv2.map((r) => `${r[0]} ${r[1]} then ${r[6]}`).join(", ")})`);
+  ok(await page.locator("#adviceTable th.then").isVisible() && (await page.textContent("#adviceHead")).includes("next turn"), "two turns: the Then column and heading show");
+  await page.uncheck("#twoTurns"); await page.waitForTimeout(400);
+  const adv1b = await adviceOf(page);
+  ok(same(adv1b, want1) && await page.locator("#adviceTable th.then").isHidden(), "unticking goes back to this turn");
 
   // Turn 2 after your Earthquake hit: switch rows appear, amber, and match.
   await page.fill("#turn", "2");

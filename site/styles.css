@@ -115,6 +115,9 @@ textarea { width: 100%; resize: vertical; min-height: 130px; }
 .options-table tr.best td:first-child { color: var(--best); }
 .options-table tr.tie td:first-child { color: var(--tie); }
 .options-table .pm { color: var(--muted); font-size: 12px; }
+.options-table .then { display: none; }
+.options-table.two-turns .then { display: table-cell; text-align: left; }
+.check-row { display: flex; gap: 6px; align-items: center; font-size: 13px; color: var(--muted); margin: 0 0 6px; }
 .notes { color: var(--muted); font-size: 12px; margin-top: 6px; line-height: 1.5; }
 .error-display { color: var(--error); font-size: 13px; margin-top: 6px; white-space: pre-wrap; }
 

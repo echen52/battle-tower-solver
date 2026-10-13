@@ -11116,12 +11116,16 @@ function resolveTurnWithOrder(ctx, state, yourMove, oppMove, order, loaf = null)
       if (ARENA_COMPAT.eotAfterKO) {
         snapHp(ctx, s);
         advanceTurn(s);
-        results.push({ p: fo.p, state: s, label: `${firstLabel}${firstMark} (opp never acts — KO)` });
+        results.push({ p: fo.p, state: s, label: `${firstLabel}${firstMark} (opp never acts — KO)`, ...(secondActorHp <= 0 ? { neverActed: order[1] } : {}) });
       } else {
         // PALACE FORK: the knocked-out side never acts; the turn still ends.
         snapHp(ctx, s);
         const ctxK = resolutionChanged(state, s) ? reResolve(ctx, s) : ctx;
+        const n0 = results.length;
         endOfTurnTail(ctx, ctxK, s, fo.p, `${firstLabel}${firstMark} (${order[1]} never acts — KO)`, results);
+        // TOWER: the second actor was knocked out before its action (the
+        // advisor's "KO it before it moves", engine/advise.js)
+        if (secondActorHp <= 0) for (let i = n0; i < results.length; i++) results[i].neverActed = order[1];
       }
       continue;
     }

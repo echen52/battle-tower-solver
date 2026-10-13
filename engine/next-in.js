@@ -215,7 +215,16 @@ function typeCalc(move, atkTypes, def, dmg) {
 // non-super-effective damaging move. Struggle: 0. Bits: MISSED 1, SE 2,
 // NVE 4, DOESNT_AFFECT_FOE 8 (MOVE_RESULT_*).
 export const AI_FLAG = { MISSED, SE, NVE, DOESNT_AFFECT: NO_EFFECT };
+// A pure function of its three arguments: memoised (ShouldSwitch asks it for
+// every party of a readout).
+const typeCalcMemo = new Map();
 export function aiTypeCalc(move, targetSpecies, targetAbility) {
+  const k = `${move}|${targetSpecies}|${targetAbility}`;
+  let v = typeCalcMemo.get(k);
+  if (v === undefined) typeCalcMemo.set(k, (v = aiTypeCalcRaw(move, targetSpecies, targetAbility)));
+  return v;
+}
+function aiTypeCalcRaw(move, targetSpecies, targetAbility) {
   if (move === "Struggle") return 0;
   const m = L.MOVES[move];
   const moveType = m.type;

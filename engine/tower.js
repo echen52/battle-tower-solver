@@ -71,14 +71,31 @@ export function towerChoices(ctx, state, side, { qc = false } = {}) {
 // [{ p, kind: "move", move } | { p, kind: "switch", slot }], summed over the
 // Quick Claw draw. ShouldSwitch draws nothing the Quick Claw draw decides, so
 // P(switch) and P(move | qc) multiply.
-export function oppActions(B, s) {
+// `moveCache` (a Map, optional): the move half reused across parties. The move
+// AI reads the bench only as its healthy count (logic.js:4413 / :4684
+// usablePartyMons; ctx.reserves is read while the turn RESOLVES, :6606 /
+// :6849, not here), so with the same mon out it is the same for every party
+// with that count -- test-tower checks cached = uncached.
+export function oppActions(B, s, { moveCache = null } = {}) {
   const ctx = T.engineCtx(battleView(B, s), s);
   const out = [];
+  let moves = null;
+  const moveRows = () => {
+    if (moves) return moves;
+    const k = `${s.oppActive}|${s.oppUsablePartyMons}`;
+    moves = moveCache?.get(k);
+    if (!moves) {
+      moves = [];
+      for (const draw of quickClawDraws(ctx, s)) {
+        for (const c of towerChoices(ctx, s, "opp", { qc: draw.qc })) moves.push({ p: draw.p * c.p, move: c.move, refused: c.refused });
+      }
+      moveCache?.set(k, moves);
+    }
+    return moves;
+  };
   for (const d of oppSwitchOdds(B, s)) {
     if (d.slot != null) { out.push({ p: d.p, kind: "switch", slot: d.slot }); continue; }
-    for (const draw of quickClawDraws(ctx, s)) {
-      for (const c of towerChoices(ctx, s, "opp", { qc: draw.qc })) out.push({ p: d.p * draw.p * c.p, kind: "move", move: c.move, refused: c.refused });
-    }
+    for (const c of moveRows()) out.push({ p: d.p * c.p, kind: "move", move: c.move, refused: c.refused });
   }
   return merge(out, (r) => (r.kind === "move" ? `m|${r.move}` : `s|${r.slot}`));
 }
@@ -152,11 +169,39 @@ export function partyMix({ lead, seen = [], challenge, battle, trainerId, brain 
 // merged by set, and `refused` (the share of first AI picks re-asked);
 // switchForms [{ p, key, mon, hpPct, status }] -- the same switches split by the
 // newcomer's built form (its ability), for playing the switch out (advise.js).
-export function oppReadout({ team, s, mix, known, active, level = 50 }) {
-  const activeId = setId(active);
+export function oppReadout({ team, s, mix, known, active, level = 50, cache = true, plans = null }) {
   if (!known[active]?.mon) throw new Error("tower: the mon out needs its built mon (known[active].mon)");
-  const acc = new Map(), forms_ = new Map();
+  if (!cache) return readoutPlain({ team, s, mix, known, active, level });
+  // The switch half, by party (see switchPlan); reused across positions that
+  // differ only in HP when the caller passes `plans` (a Map).
+  const pk = plans ? planKey(s, known[active].mon) : null;
+  let plan = pk ? plans.get(pk) : null;
+  if (!plan) { plan = switchPlan({ team, s, mix, known, active, level }); if (pk) plans.set(pk, plan); }
+  const acc = new Map();
+  for (const [k, r] of plan.switches) acc.set(k, { ...r });
   let refused = 0;
+  // The move half: once per (slot of the mon out, healthy teammates), on THIS
+  // position, weighted by the mass that stays in.
+  for (const e of plan.stay.values()) {
+    const st = { ...s, oppActive: e.slot, oppBench: e.bench, oppUsablePartyMons: e.usable };
+    const ctx = T.engineCtx(battleView(e.B, st), st);
+    for (const draw of quickClawDraws(ctx, st)) {
+      for (const c of towerChoices(ctx, st, "opp", { qc: draw.qc })) {
+        const q = e.p * draw.p * c.p, k = `m|${c.move}`, x = acc.get(k);
+        if (x) x.p += q; else acc.set(k, { p: q, kind: "move", move: c.move });
+        refused = Math.max(refused, c.refused ?? 0);
+      }
+    }
+  }
+  const rows = [...acc.values()].sort((a, b) => b.p - a.p);
+  return { rows, pSwitch: rows.filter((r) => r.kind === "switch").reduce((a, r) => a + r.p, 0), refused,
+    switchForms: [...plan.forms.values()].map((g) => ({ ...g })).sort((a, b) => b.p - a.p) };
+}
+
+// Every party of the mix with every ability form of its unseen teammates, as
+// the readout's position (the mon out in its slot, the bench as you know it).
+function* partyForms({ s, mix, known, active, level }) {
+  const activeId = setId(active);
   for (const m of mix) {
     const slot = m.ids.indexOf(activeId);
     if (slot < 0) throw new Error(`tower: ${active} is not in a party of the mix`);
@@ -174,25 +219,60 @@ export function oppReadout({ team, s, mix, known, active, level = 50 }) {
         const kn = known[poolEntry(m.ids[i]).key];
         return { ...T.freshEntry(mon), hpPct: kn?.hpPct ?? 100, status: kn?.status ?? null };
       });
-      const st = { ...s, oppActive: slot, oppBench: bench, oppUsablePartyMons: bench.filter((e) => e && e.hpPct > 0).length };
-      const B = { team, oppTeam: f.mons, oppIds: m.ids };
-      for (const r of oppActions(B, st)) {
-        const k = r.kind === "move" ? `m|${r.move}` : `s|${m.ids[r.slot]}`;
-        const e = acc.get(k);
-        if (e) e.p += f.p * r.p;
-        else acc.set(k, r.kind === "move" ? { p: f.p * r.p, kind: "move", move: r.move }
-          : { p: f.p * r.p, kind: "switch", key: poolEntry(m.ids[r.slot]).key, species: f.mons[r.slot].species });
-        if (r.kind === "move") refused = Math.max(refused, r.refused ?? 0);
-        else {
-          const key = poolEntry(m.ids[r.slot]).key, mon = f.mons[r.slot], fk = `${key}|${mon.ability}`;
-          const g = forms_.get(fk);
-          if (g) g.p += f.p * r.p;
-          else forms_.set(fk, { p: f.p * r.p, key, mon, hpPct: bench[r.slot].hpPct, status: bench[r.slot].status });
-        }
-      }
+      const usable = bench.filter((e) => e && e.hpPct > 0).length;
+      yield { p: f.p, m, mons: f.mons, slot, bench, usable, st: { ...s, oppActive: slot, oppBench: bench, oppUsablePartyMons: usable } };
+    }
+  }
+}
+function addSwitch(acc, forms, x, r, q) {
+  const key = poolEntry(x.m.ids[r.slot]).key, mon = x.mons[r.slot];
+  const k = `s|${x.m.ids[r.slot]}`, e = acc.get(k);
+  if (e) e.p += q; else acc.set(k, { p: q, kind: "switch", key, species: mon.species });
+  const fk = `${key}|${mon.ability}`, g = forms.get(fk);
+  if (g) g.p += q; else forms.set(fk, { p: q, key, mon, hpPct: x.bench[r.slot].hpPct, status: x.bench[r.slot].status });
+}
+
+// ShouldSwitch for every party: its switches merged, and the mass that stays
+// in by (slot of the mon out, healthy-teammate count) -- all the move AI reads
+// of the bench (see oppActions).
+function switchPlan(pos) {
+  const stay = new Map(), switches = new Map(), forms = new Map();
+  for (const x of partyForms(pos)) {
+    const B = { team: pos.team, oppTeam: x.mons, oppIds: x.m.ids };
+    for (const d of oppSwitchOdds(B, x.st)) {
+      if (d.slot != null) { addSwitch(switches, forms, x, d, x.p * d.p); continue; }
+      const k = `${x.slot}|${x.usable}`, e = stay.get(k);
+      if (e) e.p += x.p * d.p;
+      else stay.set(k, { p: x.p * d.p, slot: x.slot, usable: x.usable, bench: x.bench, B });
+    }
+  }
+  return { stay, switches, forms };
+}
+// What ShouldSwitch reads of a position, so two positions with the same key
+// have the same switch half: everything but HP (and the per-turn damage
+// records, which nothing at selection reads), plus the one HP test it makes --
+// Natural Cure's "at least half" (should-switch.js ShouldSwitchIfNaturalCure).
+const PLAN_SKIP = new Set(["yourHpPct", "oppHpPct", "youDamageTaken", "oppDamageTaken", "oppBench", "oppActive", "oppUsablePartyMons"]);
+function planKey(s, mon) {
+  const half = Math.round((s.oppHpPct / 100) * mon.stats.hp) < Math.floor(mon.stats.hp / 2);
+  return `${half}|${JSON.stringify(s, (k, v) => (PLAN_SKIP.has(k) ? undefined : v === undefined ? "~u" : v))}`;
+}
+
+// The readout party by party, with oppActions whole (no reuse): the reference
+// test-tower compares the planned readout against.
+function readoutPlain(pos) {
+  const acc = new Map(), forms = new Map();
+  let refused = 0;
+  for (const x of partyForms(pos)) {
+    const B = { team: pos.team, oppTeam: x.mons, oppIds: x.m.ids };
+    for (const r of oppActions(B, x.st)) {
+      if (r.kind === "switch") { addSwitch(acc, forms, x, r, x.p * r.p); continue; }
+      const k = `m|${r.move}`, e = acc.get(k);
+      if (e) e.p += x.p * r.p; else acc.set(k, { p: x.p * r.p, kind: "move", move: r.move });
+      refused = Math.max(refused, r.refused ?? 0);
     }
   }
   const rows = [...acc.values()].sort((a, b) => b.p - a.p);
   return { rows, pSwitch: rows.filter((r) => r.kind === "switch").reduce((a, r) => a + r.p, 0), refused,
-    switchForms: [...forms_.values()].sort((a, b) => b.p - a.p) };
+    switchForms: [...forms.values()].sort((a, b) => b.p - a.p) };
 }

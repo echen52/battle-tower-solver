@@ -3,7 +3,7 @@
 // engine. The readout is cheap (well under a second), so it reruns on every
 // change.
 
-import { parseTeam, setChoices, setLabel, ivTierOdds, buildOpponent, buildPosition, readout, pct, STAGE_KEYS, brainFor, genderOf, trainerChoices, sameSpecies } from "./ui-logic.js";
+import { parseTeam, setChoices, setLabel, ivTierOdds, buildOpponent, buildPosition, readout, pct, STAGE_KEYS, brainFor, genderOf, trainerChoices, sameSpecies, rankAdvice, mergeParts } from "./ui-logic.js";
 import { FRONTIER_POOL } from "../engine/frontier-pool.js";
 import { buildPlayerMon } from "../engine/team.js";
 
@@ -287,31 +287,91 @@ function readForm() {
 }
 
 // ── the advisor ────────────────────────────────────────────────────────────
-// In a module worker (site/advise-worker.js): a new request supersedes the
-// last; only the latest answer is drawn.
-let adviceWorker = null, adviceId = 0;
+// In module workers (site/advise-worker.js). This turn first, in one worker;
+// with "Two turns" on, the two-turn numbers then follow, one job per option
+// spread over a small pool (each option's numbers are independent). A new
+// request supersedes the last: only the latest answer is drawn, and a pool
+// still busy with an old one is stopped.
+let adviceWorker = null, adviceId = 0, pool = [];
+const POOL = Math.max(1, Math.min(6, (navigator.hardwareConcurrency || 2) - 1));
+const TWO_KEY = "towerSolver.twoTurns";
+function newWorker() { return new Worker(new URL("./advise-worker.js", import.meta.url), { type: "module" }); }
+function stopPool() { for (const w of pool) w.terminate(); pool = []; }
 function requestAdvice(form) {
   if (!adviceWorker) {
-    adviceWorker = new Worker(new URL("./advise-worker.js", import.meta.url), { type: "module" });
-    adviceWorker.onmessage = (e) => { if (e.data.id === adviceId) renderAdvice(e.data); };
+    adviceWorker = newWorker();
     adviceWorker.onerror = (e) => { e.preventDefault?.(); renderAdvice({ error: e.message || "the advisor failed to load" }); };
   }
-  adviceId++;
+  const id = ++adviceId;
+  stopPool();
+  const two = $("twoTurns").checked;
   $("adviceNote").textContent = "Working out each option…";
-  adviceWorker.postMessage({ id: adviceId, form });
+  adviceWorker.onmessage = (e) => {
+    if (e.data.id !== adviceId) return;
+    const go = two && !e.data.error;
+    renderAdvice({ ...e.data, turns: 1, pending: go });
+    if (go) requestTwo(id, form, e.data.rows.filter((r) => !r.error).map((r) => r.label));
+  };
+  adviceWorker.postMessage({ id, form, turns: 1 });
+}
+function requestTwo(id, form, labels) {
+  if (!labels.length) return;
+  // one job per (option, slice): every option in POOL slices, so a heavy one
+  // is spread over the whole pool too
+  const queue = labels.flatMap((label) => Array.from({ length: POOL }, (_, k) => ({ label, part: [k, POOL] })));
+  const total = queue.length, parts = [];
+  const fail = (msg) => { if (id === adviceId) { stopPool(); renderAdvice({ error: msg }); } };
+  const next = (w) => {
+    const job = queue.shift();
+    if (job) w.postMessage({ id, form, turns: 2, only: [job.label], part: job.part });
+  };
+  pool = Array.from({ length: Math.min(POOL, queue.length) }, () => {
+    const w = newWorker();
+    w.onerror = (e) => { e.preventDefault?.(); fail(e.message || "the advisor failed to load"); };
+    w.onmessage = (e) => {
+      if (e.data.id !== adviceId) return;
+      if (e.data.error) return fail(e.data.error);
+      parts.push(e.data.rows);
+      if (parts.length === total) {
+        stopPool();
+        const merged = new Map(mergeParts(parts).map((r) => [r.label, r]));
+        renderAdvice({ rows: labels.map((l) => merged.get(l)), turns: 2 });
+      } else {
+        $("adviceNote").textContent = `Looking two turns ahead: ${Math.round((100 * parts.length) / total)}%…`;
+        next(w);
+      }
+    };
+    return w;
+  });
+  for (const w of pool) next(w);
+  $("adviceNote").textContent = "Looking two turns ahead: 0%…";
 }
 const fmtHp = (x) => `${x.toFixed(0)}%`;
-function renderAdvice({ rows, error }) {
+const fmtP = (x) => pct(x, x > 0 && x < 0.01 ? 1 : 0);
+function renderAdvice({ rows, error, turns = 1, pending = false }) {
   const body = $("adviceTable").querySelector("tbody");
+  $("adviceTable").classList.toggle("two-turns", turns === 2);
+  $("adviceHead").textContent = turns === 2 ? "Your options, this turn and your best reply next turn" : "Your options this turn";
   if (error) { body.innerHTML = ""; $("adviceNote").textContent = error; return; }
-  body.innerHTML = rows.map((r) => r.error
-    ? `<tr><td>${r.label}</td><td colspan="4" class="pm">not analysable: ${r.error}</td></tr>`
-    : `<tr><td>${r.label}${r.approx ? ' <span class="pm" title="Too many damage-roll outcomes to list: played with the average roll.">~</span>' : ""}</td>
-      <td>${pct(r.pKO, r.pKO > 0 && r.pKO < 0.01 ? 1 : 0)}</td><td>${pct(r.pFaint, r.pFaint > 0 && r.pFaint < 0.01 ? 1 : 0)}</td><td>${fmtHp(r.dealt)}</td><td>${fmtHp(r.taken)}</td></tr>`).join("");
+  const ranked = rankAdvice(rows);
+  body.innerHTML = ranked.map((r) => r.error
+    ? `<tr><td>${r.label}</td><td colspan="6" class="pm">not analysable: ${r.error}</td></tr>`
+    : `<tr${r.best ? ' class="best"' : ""}><td>${r.best ? "★ " : ""}${r.label}${r.approx ? ' <span class="pm" title="Too many damage-roll outcomes to list: played with the average roll.">~</span>' : ""}</td>
+      <td>${fmtP(r.pKOFirst)}</td><td>${fmtP(r.pKO)}</td><td>${fmtP(r.pFaint)}</td><td>${fmtHp(r.dealt)}</td><td>${fmtHp(r.taken)}</td>
+      <td class="then">${turns === 2 ? thenText(r) : ""}</td></tr>`).join("");
   const notes = [];
+  if (pending) notes.push("Looking two turns ahead…");
+  if (turns === 2) notes.push("Turn 2 is played where both Pokémon are still out and it did not switch; a KO, a faint or its switch ends the count at turn 1.");
   if (rows.some((r) => r.pLeaves > 0)) notes.push("Roar / Whirlwind / Baton Pass that make it leave end the count there (who comes in is not played).");
   if (rows.some((r) => r.cover < 0.999 && !r.error)) notes.push("Some options are not open against every set it could be (a trapping ability).");
   $("adviceNote").textContent = notes.join(" ");
+}
+// the follow-up picked most often, with how often
+function thenText(r) {
+  if (!r.follow?.length) return '<span class="pm">—</span>';
+  const [l, p] = r.follow[0];
+  const more = r.follow.length > 1 ? ` <span class="pm" title="${r.follow.map(([x, q]) => `${x} ${pct(q)}`).join(", ")}">+${r.follow.length - 1}</span>` : "";
+  return `${l} <span class="pm">${pct(p)}</span>${more}`;
 }
 
 // HP numbers next to the % boxes, and the readout -- on every change.
@@ -338,7 +398,7 @@ function refresh() {
     $("notes").textContent = pos.notes.join(" ") + (r.refused > 0 ? ` Its AI first picked a move it cannot use ${pct(r.refused, 1)} of the time; the game asks it again, so those turns are shared out over the rest.` : "");
   } catch (e) {
     $("oppChoices").innerHTML = ""; $("switchLine").textContent = "";
-    $("adviceTable").querySelector("tbody").innerHTML = ""; $("adviceNote").textContent = ""; adviceId++;
+    $("adviceTable").querySelector("tbody").innerHTML = ""; $("adviceNote").textContent = ""; adviceId++; stopPool();
     $("notes").textContent = e.message;
   }
 }
@@ -355,6 +415,8 @@ function init() {
   setupCombo("other1Set", "other1SetList", { allowEmpty: true }); setupCombo("other2Set", "other2SetList", { allowEmpty: true });
   setupCombo("trainer", "trainerList", { allowEmpty: true, source: () => trainerLabels, valid: (v) => trainerByLabel.has(v.trim()) });
   refreshTrainerList(); refreshSetList();
+  try { $("twoTurns").checked = localStorage.getItem(TWO_KEY) === "1"; } catch { /* not kept */ }
+  $("twoTurns").addEventListener("change", () => { try { localStorage.setItem(TWO_KEY, $("twoTurns").checked ? "1" : "0"); } catch { /* not kept */ } });
   $("candList").addEventListener("change", (e) => {
     if (!e.target.classList.contains("cand-tick")) return;
     if (e.target.checked) candTicks.add(e.target.dataset.key); else candTicks.delete(e.target.dataset.key);
