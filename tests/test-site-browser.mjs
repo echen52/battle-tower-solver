@@ -50,7 +50,11 @@ const adviceOf = async (page) => {
 const fmt = (x) => U.pct(x, x > 0 && x < 0.01 ? 1 : 0);
 // ranked (★ on the best), KO first / KO it / you faint / dealt / taken, and
 // with two turns the follow-up most often picked ("then ..." under the option)
-const thenOf = (r) => !r.follow?.length ? "—" : `${r.follow[0][0]} ${U.pct(r.follow[0][1])}${r.follow.length > 1 ? ` +${r.follow.length - 1}` : ""}`;
+const thenOf = (r) => {
+  if (!r.follow?.length) return "—";
+  const shown = r.follow.filter(([, q], i) => i === 0 || q >= 0.01), small = r.follow.length - shown.length;
+  return shown.map(([l, q]) => `${l} ${U.pct(q)}`).join(", ") + (small ? `, +${small} under 1%` : "");
+};
 const expectAdvice = (form, turns = 1) => U.rankAdvice(U.advise(U.buildPosition(form), { turns })).map((r) => [(r.best ? "★ " : "") + r.label + (r.approx ? " ~" : "") + (turns === 2 ? `then ${thenOf(r)}` : ""),
   fmt(r.pKOFirst), fmt(r.pKO), fmt(r.pFaint), `${r.dealt.toFixed(0)}%`, `${r.taken.toFixed(0)}%`]);
 

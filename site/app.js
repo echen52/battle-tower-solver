@@ -371,7 +371,7 @@ function renderAdvice({ rows, error, turns = 1, pending = false }) {
   const ranked = rankAdvice(rows);
   body.innerHTML = ranked.map((r) => r.error
     ? `<tr><td>${r.label}</td><td colspan="5" class="pm">not analysable: ${r.error}</td></tr>`
-    : `<tr${r.best ? ' class="best"' : ""}><td>${r.best ? "★ " : ""}${r.label}${r.approx ? ' <span class="pm" title="Too many damage-roll outcomes to list: played with the average roll.">~</span>' : ""}${turns === 2 ? `<span class="then-line" title="Your best reply next turn, the one picked most often">then ${thenText(r)}</span>` : ""}</td>
+    : `<tr${r.best ? ' class="best"' : ""}><td>${r.best ? "★ " : ""}${r.label}${r.approx ? ' <span class="pm" title="Too many damage-roll outcomes to list: played with the average roll.">~</span>' : ""}${turns === 2 ? `<span class="then-line" title="Your best reply next turn, and how often it is the best (it depends on how this turn goes)">then ${thenText(r)}</span>` : ""}</td>
       <td>${fmtP(r.pKOFirst)}</td><td>${fmtP(r.pKO)}</td><td>${fmtP(r.pFaint)}</td><td>${fmtHp(r.dealt)}</td><td>${fmtHp(r.taken)}</td></tr>`).join("");
   const notes = [];
   if (pending) notes.push(`Looking two turns ahead: ${cur?.progress ?? 0}%… (this turn's numbers meanwhile)`);
@@ -380,12 +380,12 @@ function renderAdvice({ rows, error, turns = 1, pending = false }) {
   if (rows.some((r) => r.cover < 0.999 && !r.error)) notes.push("Some options are not open against every set it could be (a trapping ability).");
   $("adviceNote").textContent = notes.join(" ");
 }
-// the follow-up picked most often, with how often
+// every follow-up with how often it is the best reply, most often first;
+// those under 1% are only counted
 function thenText(r) {
-  if (!r.follow?.length) return '<span class="pm">—</span>';
-  const [l, p] = r.follow[0];
-  const more = r.follow.length > 1 ? ` <span class="pm" title="${r.follow.map(([x, q]) => `${x} ${pct(q)}`).join(", ")}">+${r.follow.length - 1}</span>` : "";
-  return `${l} <span class="pm">${pct(p)}</span>${more}`;
+  if (!r.follow?.length) return "—";
+  const shown = r.follow.filter(([, q], i) => i === 0 || q >= 0.01), small = r.follow.length - shown.length;
+  return shown.map(([l, q]) => `${l} ${pct(q)}`).join(", ") + (small ? `, +${small} under 1%` : "");
 }
 
 // HP numbers next to the % boxes, and the readout -- on every change.
