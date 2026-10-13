@@ -33,7 +33,10 @@ invent or randomise behaviour.
    damage taken" -> advise.js better: pKOFirst (it faints before it attacks:
    logic.js neverActed, or its action was the switch), KO chances within
    KO_TIE = 1 point equal, then least HP taken; the page stars the top row.
-   TWO TURNS DONE (2026-10-13, page toggle): advise.js playTwo -- each option,
+   TWO TURNS DONE (2026-10-13; page: This turn / Two turns buttons -- user
+   wants to pick per look; both results kept per position, so switching back
+   redraws at once; number columns get a "2 turns" line, the follow-up shows
+   as "then ..." under the option): advise.js playTwo -- each option,
    then in every position where both mons are still out and it did not
    switch / leave, your best reply by the same rule against the readout
    RERUN there. Turn-1 outcomes grouped: same state but HP, HP in 4% bands
@@ -112,7 +115,7 @@ New / replaced:
 | test-ui-logic | 43: every page input onto its engine field; party inputs -> partyMix / known; readout = oppReadout over the sleep mix; trainer list / labels / pool / IVs; candidate odds = pool shares (trainer known), = the bracket draw worked by hand, moved by a seen teammate (worked trainer by trainer); readout over candidates = their weighted readouts. tools/mutate-ui.py 6/6 |
 | test-two-turn | 20: neverActed = the engine's "opp never acts — KO" text; KO first = KO when you outspeed, 0 when outsped; the ranking on hand rows; readout with reuse = party by party on 40+ positions (turn-1 outcomes, a Natural Cure sleeper either side of half); playTwo with tiny bands = a brute force written in the test exactly, 4% bands within 1 point (Aerial Ace into Milotic: 10.05 vs 10.34 KO first); a switching position (turn 2 only where it stayed; a KO after its switch counts as first); slices add up. tools/mutate-two.py 9/10 -- the miss (stay mass keyed by slot only) is equivalent here: every party of a mix holds every seen mon at its entered HP, so the healthy count never varies within a readout |
 | test-advise | 19: move vs move = palaceTurn, your switch = team.js switchTurn (Crunch and Pursuit), its switch = battle.js oppSwitchTurn (Perish 0 forces it), both switch -- all with both choices forced by Encore so the Palace layer's choices equal the Tower's; a mixed stay/switch turn; Pursuit damage counted on the leaver; exact rolls vs 4,000 turns with drawn rolls (Meteor Mash into Snorlax 70%: exact 70.4% KO; point estimate differs); summarize by hand; options (Encore, recharge, fainted mate, Shadow Tag); advise over three candidates = weighted. tools/mutate-advise.py 8/8 |
-| test-site-browser | 30 (+9 trainer / candidates, +2 advice table = Node): the page in headless Chromium (Playwright from battle_arena_sim/node_modules): bars = Node readout at turn 1, after a landed Earthquake (switch rows), with an "also seen" mon, after clearing it, at Anabel's battle; saved team over a reload; no page error |
+| test-site-browser | 35 (+9 trainer / candidates, advice table = Node one turn and two turns, the buttons switch back and forth without recomputing, the headings): the page in headless Chromium (Playwright from battle_arena_sim/node_modules): bars = Node readout at turn 1, after a landed Earthquake (switch rows), with an "also seen" mon, after clearing it, at Anabel's battle; saved team over a reload; no page error |
 
 Mutations (tools/mutate-tower.py, tower.js): 6/8 caught. The 2 missed are
 equivalent: (a) skipping aiDecisionState inside towerChoices -- buildAiView
