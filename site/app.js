@@ -286,6 +286,34 @@ function readForm() {
   };
 }
 
+// ── the advisor ────────────────────────────────────────────────────────────
+// In a module worker (site/advise-worker.js): a new request supersedes the
+// last; only the latest answer is drawn.
+let adviceWorker = null, adviceId = 0;
+function requestAdvice(form) {
+  if (!adviceWorker) {
+    adviceWorker = new Worker(new URL("./advise-worker.js", import.meta.url), { type: "module" });
+    adviceWorker.onmessage = (e) => { if (e.data.id === adviceId) renderAdvice(e.data); };
+    adviceWorker.onerror = (e) => { e.preventDefault?.(); renderAdvice({ error: e.message || "the advisor failed to load" }); };
+  }
+  adviceId++;
+  $("adviceNote").textContent = "Working out each option…";
+  adviceWorker.postMessage({ id: adviceId, form });
+}
+const fmtHp = (x) => `${x.toFixed(0)}%`;
+function renderAdvice({ rows, error }) {
+  const body = $("adviceTable").querySelector("tbody");
+  if (error) { body.innerHTML = ""; $("adviceNote").textContent = error; return; }
+  body.innerHTML = rows.map((r) => r.error
+    ? `<tr><td>${r.label}</td><td colspan="4" class="pm">not analysable: ${r.error}</td></tr>`
+    : `<tr><td>${r.label}${r.approx ? ' <span class="pm" title="Too many damage-roll outcomes to list: played with the average roll.">~</span>' : ""}</td>
+      <td>${pct(r.pKO, r.pKO > 0 && r.pKO < 0.01 ? 1 : 0)}</td><td>${pct(r.pFaint, r.pFaint > 0 && r.pFaint < 0.01 ? 1 : 0)}</td><td>${fmtHp(r.dealt)}</td><td>${fmtHp(r.taken)}</td></tr>`).join("");
+  const notes = [];
+  if (rows.some((r) => r.pLeaves > 0)) notes.push("Roar / Whirlwind / Baton Pass that make it leave end the count there (who comes in is not played).");
+  if (rows.some((r) => r.cover < 0.999 && !r.error)) notes.push("Some options are not open against every set it could be (a trapping ability).");
+  $("adviceNote").textContent = notes.join(" ");
+}
+
 // HP numbers next to the % boxes, and the readout -- on every change.
 function refresh() {
   if (teamCfgs) teamCfgs.forEach((c, i) => {
@@ -299,8 +327,10 @@ function refresh() {
       const o = buildOpponent({ setKey: key, ability: $("oppAbility").value || FRONTIER_POOL[key].abilities[0], ivTier: Number($("oppIv").value) || 31, gender: $("oppGender").value || null, level: levelNow() });
       $("oppHpAbs").textContent = `${Math.round(((Number($("oppHp").value) || 100) / 100) * o.stats.hp)}/${o.stats.hp}`;
     }
-    const pos = buildPosition(readForm());
+    const form = readForm();
+    const pos = buildPosition(form);
     const r = readout(pos);
+    requestAdvice(form);
     renderCands(pos.setOdds);
     $("oppChoices").innerHTML = r.rows.slice(0, 10).map((x) => `<div class="cb-row${x.kind === "switch" ? " cb-switch" : ""}"><div class="cb-name"><div class="cb-fill" style="width:${(100 * x.p).toFixed(1)}%"></div><span>${x.label}</span></div><div class="cb-p">${pct(x.p, x.p < 0.01 && x.p > 0 ? 1 : 0)}</div></div>`).join("")
       + (r.rows.length > 10 ? `<div class="notes">+ ${r.rows.length - 10} more, together ${pct(r.rows.slice(10).reduce((a, x) => a + x.p, 0), 1)}</div>` : "");
@@ -308,6 +338,7 @@ function refresh() {
     $("notes").textContent = pos.notes.join(" ") + (r.refused > 0 ? ` Its AI first picked a move it cannot use ${pct(r.refused, 1)} of the time; the game asks it again, so those turns are shared out over the rest.` : "");
   } catch (e) {
     $("oppChoices").innerHTML = ""; $("switchLine").textContent = "";
+    $("adviceTable").querySelector("tbody").innerHTML = ""; $("adviceNote").textContent = ""; adviceId++;
     $("notes").textContent = e.message;
   }
 }

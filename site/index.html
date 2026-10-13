@@ -102,6 +102,19 @@
     <div id="switchLine" class="progress"></div>
     <div id="notes" class="notes"></div>
 
+    <h3>Your options this turn</h3>
+    <table class="options-table" id="adviceTable">
+      <thead><tr>
+        <th title="Each thing you can do this turn, played out against everything it might do (the odds above), every damage roll, crit and miss counted.">Option</th>
+        <th title="Chance one of their Pokémon that was out faints this turn">KO it</th>
+        <th title="Chance one of your Pokémon faints this turn">You faint</th>
+        <th title="Expected HP it loses this turn, in % of its max HP (summed over their Pokémon that were out)">Dealt</th>
+        <th title="Expected HP you lose this turn, in % of the max HP of each of your Pokémon hit (a switch-in included)">Taken</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+    <div id="adviceNote" class="progress"></div>
+
     <h3>Field</h3>
     <div class="field-row">
       <label for="weather">Weather</label>

@@ -42,6 +42,13 @@ const field = { weather: "", weatherTurns: null, you: { spikes: 0 }, opp: { spik
 const barsOf = (page) => page.$$eval("#oppChoices .cb-row", (rows) => rows.map((r) => [r.querySelector("span").textContent, r.querySelector(".cb-p").textContent]));
 const expectBars = (r) => r.rows.slice(0, 10).map((x) => [x.label, U.pct(x.p, x.p < 0.01 && x.p > 0 ? 1 : 0)]);
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+// the advice table, once the worker has answered; and the same rows from Node
+const adviceOf = async (page) => {
+  await page.waitForFunction(() => !/Working/.test(document.getElementById("adviceNote").textContent) && document.querySelectorAll("#adviceTable tbody tr").length > 0, null, { timeout: 60000 });
+  return page.$$eval("#adviceTable tbody tr", (trs) => trs.map((tr) => [...tr.children].map((td) => td.textContent.trim())));
+};
+const fmt = (x) => U.pct(x, x > 0 && x < 0.01 ? 1 : 0);
+const expectAdvice = (form) => U.advise(U.buildPosition(form)).map((r) => [r.label + (r.approx ? " ~" : ""), fmt(r.pKO), fmt(r.pFaint), `${r.dealt.toFixed(0)}%`, `${r.taken.toFixed(0)}%`]);
 
 const browser = await chromium.launch();
 try {
@@ -74,6 +81,8 @@ try {
   const b1 = await barsOf(page);
   ok(b1.length > 0 && same(b1, expectBars(r1)), `turn-1 bars = readout (${b1.map((b) => b.join(" ")).join(", ")})`);
   ok((await page.textContent("#switchLine")).includes("does not switch"), "turn 1: no switch line");
+  const adv1 = await adviceOf(page), want1 = expectAdvice(form1);
+  ok(adv1.length === 6 && same(adv1, want1), `advice table = Node's advise (${adv1.map((r) => `${r[0]} ${r[1]}`).join(", ")})`);
 
   // Turn 2 after your Earthquake hit: switch rows appear, amber, and match.
   await page.fill("#turn", "2");
@@ -121,6 +130,7 @@ try {
   ok(ticked.join() === pick.same.join(), `could be: all of ${pick.same.join(", ")} ticked`);
   const formT = { ...form1, opp: oppForm({ setKey: pick.same[0], candidates: pick.same, ability: null, ivTier: N.fixedIvs(pick.id) }), run: { challenge: 7, battle: 1, turn: 1, level: 50, trainerId: pick.id } };
   const posT = U.buildPosition(formT), rT = U.readout(posT);
+  ok(same(await adviceOf(page), expectAdvice(formT)), "advice over the candidates = Node's");
   ok(same(await barsOf(page), expectBars(rT)), `bars = readout over the candidates (${(await barsOf(page)).map((b) => b.join(" ")).join(", ")})`);
   const shown = await page.$$eval("#candList .cand-row", (rows) => rows.map((r) => r.querySelector(".cand-p").textContent));
   ok(shown.join() === pick.same.map((k) => U.pct(posT.setOdds.find((x) => x.key === k).p)).join(), `odds shown: ${shown.join(", ")}`);

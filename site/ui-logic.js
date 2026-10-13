@@ -12,6 +12,7 @@ import { FRONTIER_TRAINERS } from "../engine/frontier-trainers.js";
 import { trainerPrior, fixedIvs } from "../engine/next-in.js";
 import { partyMix, oppReadout } from "../engine/tower.js";
 import { TRAINER_CLASS_NAMES } from "../engine/trainer-classes.js";
+import { yourOptions, adviseOption } from "../engine/advise.js";
 
 export const STAGE_KEYS = ["atk", "def", "spa", "spd", "spe", "accuracy", "evasion"];
 const HIGH_TIER = 849;
@@ -314,3 +315,36 @@ export function readout(pos) {
 }
 
 export const pct = (x, digits = 0) => `${(100 * x).toFixed(digits)}%`;
+
+// ── the advisor (one turn) ─────────────────────────────────────────────────
+// Each of your options this turn, played out against the opponent's action
+// odds (engine/advise.js), averaged over the candidates and the start mix.
+// Returns [{ label, kind, pKO, pFaint, dealt, taken, pLeaves, approx, cover }]
+// in the order your options come (moves, then switches); cover < 1 when the
+// option is not available against every candidate (e.g. a trapping ability).
+export function advise(pos) {
+  const acc = new Map();
+  for (const c of pos.cands) {
+    const reserves = 2 - Object.entries(c.known).filter(([k, v]) => k !== c.key && v.hpPct === 0).length;
+    for (const { p, state } of c.start) {
+      const w = c.w * p;
+      const r = oppReadout({ team: pos.team, s: state, mix: c.mix, known: c.known, active: c.key, level: pos.level });
+      const opp = { pStay: 1 - r.pSwitch, switches: r.switchForms };
+      const tctx = { team: pos.team, opp: c.opp, oppReserves: reserves, activeKey: c.key };
+      for (const o of yourOptions(tctx, state)) {
+        let x;
+        try { x = adviseOption(tctx, state, o, opp); } catch (e) { x = { error: e.message }; }
+        const e = acc.get(o.label) ?? { label: o.label, kind: o.kind, cover: 0, pKO: 0, pFaint: 0, dealt: 0, taken: 0, pLeaves: 0, approx: false, error: null };
+        e.cover += w;
+        if (x.error) e.error = x.error;
+        else { for (const k of ["pKO", "pFaint", "dealt", "taken", "pLeaves"]) e[k] += w * x[k]; e.approx ||= x.approx; }
+        acc.set(o.label, e);
+      }
+    }
+  }
+  return [...acc.values()].map((e) => {
+    if (e.error) return { label: e.label, kind: e.kind, error: e.error, cover: e.cover };
+    const n = (v) => v / e.cover;
+    return { ...e, pKO: n(e.pKO), pFaint: n(e.pFaint), dealt: n(e.dealt), taken: n(e.taken), pLeaves: n(e.pLeaves) };
+  });
+}

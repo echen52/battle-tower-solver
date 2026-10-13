@@ -149,11 +149,13 @@ export function partyMix({ lead, seen = [], challenge, battle, trainerId, brain 
 // Unseen teammates are built from their set with each ability equally likely
 // (personality & 1; buildReplacement). Returns { rows, pSwitch } with rows
 // [{ p, kind: "move", move } | { p, kind: "switch", key, species }], switches
-// merged by set, and `refused` (the share of first AI picks re-asked).
+// merged by set, and `refused` (the share of first AI picks re-asked);
+// switchForms [{ p, key, mon, hpPct, status }] -- the same switches split by the
+// newcomer's built form (its ability), for playing the switch out (advise.js).
 export function oppReadout({ team, s, mix, known, active, level = 50 }) {
   const activeId = setId(active);
   if (!known[active]?.mon) throw new Error("tower: the mon out needs its built mon (known[active].mon)");
-  const acc = new Map();
+  const acc = new Map(), forms_ = new Map();
   let refused = 0;
   for (const m of mix) {
     const slot = m.ids.indexOf(activeId);
@@ -181,9 +183,16 @@ export function oppReadout({ team, s, mix, known, active, level = 50 }) {
         else acc.set(k, r.kind === "move" ? { p: f.p * r.p, kind: "move", move: r.move }
           : { p: f.p * r.p, kind: "switch", key: poolEntry(m.ids[r.slot]).key, species: f.mons[r.slot].species });
         if (r.kind === "move") refused = Math.max(refused, r.refused ?? 0);
+        else {
+          const key = poolEntry(m.ids[r.slot]).key, mon = f.mons[r.slot], fk = `${key}|${mon.ability}`;
+          const g = forms_.get(fk);
+          if (g) g.p += f.p * r.p;
+          else forms_.set(fk, { p: f.p * r.p, key, mon, hpPct: bench[r.slot].hpPct, status: bench[r.slot].status });
+        }
       }
     }
   }
   const rows = [...acc.values()].sort((a, b) => b.p - a.p);
-  return { rows, pSwitch: rows.filter((r) => r.kind === "switch").reduce((a, r) => a + r.p, 0), refused };
+  return { rows, pSwitch: rows.filter((r) => r.kind === "switch").reduce((a, r) => a + r.p, 0), refused,
+    switchForms: [...forms_.values()].sort((a, b) => b.p - a.p) };
 }
