@@ -164,6 +164,59 @@ const key = (cs) => JSON.stringify(cs.map((c) => [c.move, c.aiRan, Math.round(c.
   ok(an.length === 1 && an[0].p === 1 && an[0].ivs === 31, "Anabel Gold: her fixed team, IVs 31");
 }
 
+// ── 4b. what the readout must carry into the AI ───────────────────────────
+{
+  // (a) The AI's memory of your moves: AI_CV_ChargeUpMove scores a charge-up
+  // move -2 when the target has Protect in BATTLE_HISTORY
+  // (data/battle_ai_scripts.s:2187). Your last move is recorded at the
+  // decision (RecordLastUsedMoveByTarget), so having just used Protect counts.
+  const you = mk("Snorlax", "Adamant", ["Body Slam", "Protect", "Shadow Ball", "Curse"], { ability: "Thick Fat" });
+  const opp = mk("Venusaur", "Modest", ["SolarBeam", "Sludge Bomb"], { ability: "Overgrow" });
+  const ctx = { you, opp, noLabels: true };
+  const s0 = { ...L.buildStartState({ you, opp }), turn: 2, youMonFirstTurn: false, oppMonFirstTurn: false };
+  const pSB = (s) => TW.towerChoices(ctx, s, "opp").find((c) => c.move === "SolarBeam")?.p ?? 0;
+  const fresh = pSB(s0), sawLast = pSB({ ...s0, youLastMove: "Protect" }), sawBefore = pSB({ ...s0, youMoveHistory: ["Protect"], youLastMove: "Body Slam" });
+  ok(sawLast < fresh && near(sawLast, sawBefore, 1e-12), `Protect seen (last move or earlier): SolarBeam ${(100 * fresh).toFixed(1)}% -> ${(100 * sawLast).toFixed(1)}%`);
+
+  // (b) An unseen teammate's ability: Arcanine 3 is Intimidate or Flash Fire.
+  // Your Flamethrower landed: FindMonThatAbsorbsOpponentsMove looks for a
+  // Flash Fire teammate (battle_ai_switch_items.c:108-209) -- only the Flash
+  // Fire form can be switched to that way. The readout = the average over
+  // both forms, worked here form by form.
+  const char = mk("Charizard", "Modest", ["Flamethrower", "Dragon Claw", "Aerial Ace", "Earthquake"], { ability: "Blaze" });
+  const active = "Starmie 3", mate = "Arcanine 3", last = "Metagross 3";
+  const act = frontier(active);
+  const ids = [active, mate, last].map(N.setId), ivs = 31;
+  const st = { ...L.buildStartState({ you: char, opp: act, yourUsablePartyMons: 0, oppUsablePartyMons: 2 }), youActive: 0, youBench: [null],
+    turn: 2, youMonFirstTurn: false, oppMonFirstTurn: false, youLastMove: "Flamethrower", oppLastLanded: "Flamethrower" };
+  const forms = N.buildReplacement(N.setId(mate), ivs);
+  ok(forms.length === 2 && forms.some((f) => f.mon.ability === "Flash Fire"), "Arcanine 3 has two abilities, one Flash Fire");
+  const lastMon = N.buildReplacement(N.setId(last), ivs);
+  let want = 0;
+  for (const f of forms) for (const g of lastMon) {
+    const B = { team: [char], oppTeam: [act, f.mon, g.mon], oppIds: ids };
+    const s = { ...st, oppActive: 0, oppBench: [null, T.freshEntry(f.mon), T.freshEntry(g.mon)] };
+    want += f.p * g.p * (TW.oppActions(B, s).find((a) => a.kind === "switch" && a.slot === 1)?.p ?? 0);
+  }
+  const ro = TW.oppReadout({ team: [char], s: st, mix: [{ p: 1, ids, ivs }], known: { [active]: { mon: act } }, active });
+  const got = ro.rows.find((r) => r.kind === "switch" && r.key === mate)?.p ?? 0;
+  ok(want > 0 && near(got, want, 1e-12), `unseen Arcanine 3: P(switch to it) averaged over its two abilities (${(100 * got).toFixed(2)}%)`);
+
+  // (c) The bench count the AI reads: AI_CBM_BatonPass (-10 with no usable
+  // teammate, count_usable_party_mons AI_USER). The readout recounts it from
+  // the bench it builds (both teammates entered at 0 HP here).
+  const bp = "Umbreon 1";
+  const um = frontier(bp);
+  const bids = [bp, "Snorlax 3", "Metagross 3"].map(N.setId);
+  const sb0 = L.buildStartState({ you: char, opp: um, yourUsablePartyMons: 0, oppUsablePartyMons: 2 });
+  // +6 evasion: AI_CV_BatonPass wants to pass its boosts on (battle_ai_scripts.s)
+  const sb = { ...sb0, youActive: 0, youBench: [null], turn: 4, oppMonFirstTurn: false, youMonFirstTurn: false, oppStages: { ...sb0.oppStages, evasion: 6 } };
+  const pBP = (known) => TW.oppReadout({ team: [char], s: sb, mix: [{ p: 1, ids: bids, ivs: 31 }], known: { [bp]: { mon: um }, ...known }, active: bp })
+    .rows.find((r) => r.move === "Baton Pass")?.p ?? 0;
+  const alive = pBP({}), gone = pBP({ "Snorlax 3": { hpPct: 0 }, "Metagross 3": { hpPct: 0 } });
+  ok(alive > 0 && gone === 0, `Baton Pass with teammates ${(100 * alive).toFixed(1)}%, with both fainted ${(100 * gone).toFixed(1)}%`);
+}
+
 console.log(`${fail ? "FAIL" : "ok"}  tower (1-4): ${pass}/${pass + fail}`);
 
 // ── 5. readout vs the literal loop ─────────────────────────────────────────
